@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>FL4 OBD MONITOR</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-height:100vh;}
+.app{width:100%;margin:0;padding:0 6px 8px;}
+
+/* HEADER — コントロールエリア（下部） */
+.hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 0 6px;border-top:1px solid #1a2a3a;border-bottom:none;margin-bottom:6px;margin-top:4px;}
+.logo{font-size:11px;letter-spacing:3px;color:#3a8aff;font-weight:bold;}
+.hdr-r{display:flex;align-items:center;gap:7px;}
+.dot{width:9px;height:9px;border-radius:50%;background:#1e2e3e;
+  border:1.5px solid #2a4a6a;transition:all .4s;}
+.dot.on {background:#00ff88;border-color:#00cc66;box-shadow:0 0 7px #00ff8860;}
+.dot.chk{background:#ffaa00;border-color:#cc8800;animation:blink 1s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.stt{font-size:10px;letter-spacing:1px;color:#2a5a7a;}
+
+/* LOG */
+.log-wrap{position:relative;margin-bottom:8px;}
+.log{background:#040810;border:1px solid #1a2a3a;border-radius:6px;
+  padding:5px 9px 5px 9px;font-size:10px;color:#2a6a4a;height:60px;
+  overflow-y:auto;line-height:1.7;}
+.log .e {color:#cc3333;}
+.log .ok{color:#22cc77;}
+.log .tx{color:#3377cc;}
+/* CONNECT */
+.conn-btn{width:100%;padding:10px;background:#0d1e30;border:1px solid #2a5a8c;
+  border-radius:7px;color:#4a9eff;font-family:'Courier New',monospace;
+  font-size:11px;letter-spacing:2px;cursor:pointer;margin-bottom:10px;transition:all .2s;}
+.conn-btn:hover  {background:#122840;border-color:#4a9eff;}
+.conn-btn:active {transform:scale(.98);}
+.conn-btn:disabled{opacity:.35;cursor:not-allowed;}
+.conn-btn.rec{border-color:#cc3333 !important;color:#cc3333 !important;animation:blink 1s infinite;}
+.conn-btn.rec:hover{border-color:#ff4444 !important;color:#ff4444 !important;}
+
+/* 2x2 ANALOG METERS — 最上部・極力大きく */
+.meters-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;}
+.meter-card{background:#0a1520;border:1px solid #1a2a3a;border-radius:10px;
+  padding:6px 4px 4px;display:flex;flex-direction:column;align-items:center;}
+.m-lbl{font-size:9px;letter-spacing:2px;color:#2a5a7a;margin-bottom:2px;}
+.m-svg{width:100%;height:auto;}
+.m-val{font-size:28px;font-weight:bold;letter-spacing:1px;line-height:1;margin-top:1px;}
+.m-unit{font-size:9px;color:#2a5a7a;letter-spacing:1px;margin-top:1px;}
+.m-val.rpm{color:#4a9eff;}
+.m-val.spd{color:#00ff88;}
+.m-val.pwr{color:#ffaa00;}
+.m-val.soc{color:#00ffcc;}
+
+/* SUB ROW */
+.sub-row{display:flex;justify-content:space-between;background:#0a1520;
+  border:1px solid #1a2a3a;border-radius:8px;padding:14px 16px;margin-bottom:8px;}
+.sub-item{display:flex;flex-direction:column;align-items:center;gap:3px;}
+.sub-item .sl{font-size:12px;color:#2a5a7a;letter-spacing:1px;}
+.sub-item .sv{font-size:22px;font-weight:bold;color:#c8d8e8;}
+.sub-item .sv.cur{color:#cc44ff;}
+
+
+.demo-note{text-align:center;font-size:9px;color:#1a3a5a;letter-spacing:1px;padding:4px 0;}
+
+::-webkit-scrollbar{width:3px;}
+::-webkit-scrollbar-track{background:#040810;}
+::-webkit-scrollbar-thumb{background:#1a3a5a;border-radius:2px;}
+
+/* 2x2 ANALOG METERS */
+.meters-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;}
+.meter-card{background:#0a1520;border:1px solid #1a2a3a;border-radius:10px;
+  position:relative;width:100%;aspect-ratio:1/1;overflow:hidden;}
+.m-svg{position:absolute;top:0;left:0;width:100%;height:100%;}
+
+/* ── 強制ポートレート ─────────────────────────────────────
+   回転フリー端末を横に向けても縦表示を維持する。
+   Orientation Lock API は iOS非対応/要フルスクリーンで実用外のため CSS で対処:
+   タッチ端末が横向きのとき body を反回転し、縦アスペクトのまま描画する。 */
+@media (orientation: landscape) and (pointer: coarse) {
+  html { overflow-x: hidden; }
+  body {
+    position: absolute;
+    top: 100vh;
+    left: 0;
+    width: 100vh;          /* 縦画面の幅 = 端末の短辺 */
+    height: 100vw;         /* 縦画面の高さ = 端末の長辺 */
+    transform: rotate(-90deg);
+    transform-origin: left top;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+}
+
+/* VIEW TABS (ゲージ / フロー) */
+.vtabs{display:flex;gap:5px;margin:2px 0 7px;}
+.vtab{flex:1;padding:7px;background:#0a1520;border:1px solid #1a2a3a;border-radius:7px;
+  color:#2a5a7a;font-family:'Courier New',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;transition:all .15s;}
+.vtab.active{border-color:#3a8aff;color:#4a9eff;background:#0d1e30;}
+#flowView{width:100%;overflow:hidden;}
+#flowSvg{display:block;width:100%;height:auto;background:#0a1520;border:1px solid #1a2a3a;border-radius:10px;margin-bottom:8px;}</style>
+</head>
+<body>
+<div class="app">
+
+<!-- VIEW TABS: ゲージ / フロー -->
+<div class="vtabs">
+  <button id="tabGauge" class="vtab active" onclick="setView('gauge')">◧ GAUGE</button>
+  <button id="tabFlow"  class="vtab" onclick="setView('flow')">⇄ FLOW</button>
+</div>
+
+<div id="gaugeView">
+<!-- 3x2 ANALOG METERS -->
+<div class="meters-grid">
+
+  <!-- Vsp (vehicle speed) — spd_echo 2920(104,16,BE,u)/258.3 -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgSpd">
+      <defs>
+        <linearGradient id="gSpd" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#00aa55"/>
+          <stop offset="100%" stop-color="#00ff88"/>
+        </linearGradient>
+      </defs>
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">Vsp  SPEED</text>
+      <path id="bgSpd" fill="none" stroke="#1a2a3a" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcSpd" fill="none" stroke="url(#gSpd)" stroke-width="10" stroke-linecap="round"/>
+      <line id="barSpd" stroke="#00ff88" stroke-width="4" stroke-linecap="round"/>
+      <text id="valSpd" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#00ff88" font-size="52" font-weight="bold" font-family="Courier New">0</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">km/h</text>
+      <text x="22" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">180</text>
+    </svg>
+  </div>
+
+  <!-- Psys (system output) — 0.000147*drv_trq3*Vsp (+直結 Peng) -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgPsys">
+      <defs>
+        <linearGradient id="gPsysP" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#0a6a7a"/>
+          <stop offset="100%" stop-color="#00e5ff"/>
+        </linearGradient>
+        <linearGradient id="gPsysN" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#cc44ff"/>
+          <stop offset="100%" stop-color="#7722aa"/>
+        </linearGradient>
+      </defs>
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">Psys  SYS OUT</text>
+      <path id="bgPsys" fill="none" stroke="#1a2a3a" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcPsysN" fill="none" stroke="url(#gPsysN)" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcPsysP" fill="none" stroke="url(#gPsysP)" stroke-width="10" stroke-linecap="round"/>
+      <line id="centerPsys" stroke="#3a5a7a" stroke-width="2" stroke-linecap="round"/>
+      <line id="barPsys" stroke="#00e5ff" stroke-width="4" stroke-linecap="round"/>
+      <text id="valPsys" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#00e5ff" font-size="46" font-weight="bold" font-family="Courier New">0.0</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">kW</text>
+      <text x="22" y="180" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">-140</text>
+      <text x="100" y="186" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="180" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">+140</text>
+    </svg>
+  </div>
+
+  <!-- Peng (engine power) — 2.09e-6*eng_trq*ENGrpm -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgPeng">
+      <defs>
+        <linearGradient id="gPeng" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#aa3311"/>
+          <stop offset="100%" stop-color="#ff5533"/>
+        </linearGradient>
+      </defs>
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">Peng  ENG PWR</text>
+      <path id="bgPeng" fill="none" stroke="#1a2a3a" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcPeng" fill="none" stroke="url(#gPeng)" stroke-width="10" stroke-linecap="round"/>
+      <line id="barPeng" stroke="#ff5533" stroke-width="4" stroke-linecap="round"/>
+      <text id="valPeng" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#ff5533" font-size="46" font-weight="bold" font-family="Courier New">0.0</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">kW</text>
+      <text x="22" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">110</text>
+    </svg>
+  </div>
+
+  <!-- Pbat (battery power) — batt_pwr 2920(672,16,BE,s)*0.0100 -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgPwr">
+      <defs>
+        <linearGradient id="gPwrP" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#886600"/>
+          <stop offset="100%" stop-color="#ffaa00"/>
+        </linearGradient>
+        <linearGradient id="gPwrN" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#cc44ff"/>
+          <stop offset="100%" stop-color="#7722aa"/>
+        </linearGradient>
+      </defs>
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">Pbat  BATT PWR</text>
+      <path id="bgPwr" fill="none" stroke="#1a2a3a" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcPwrN" fill="none" stroke="url(#gPwrN)" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcPwrP" fill="none" stroke="url(#gPwrP)" stroke-width="10" stroke-linecap="round"/>
+      <line id="centerPwr" stroke="#3a5a7a" stroke-width="2" stroke-linecap="round"/>
+      <line id="barPwr" stroke="#ffaa00" stroke-width="4" stroke-linecap="round"/>
+      <text id="valPwr" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#ffaa00" font-size="48" font-weight="bold" font-family="Courier New">0.0</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">kW</text>
+      <text x="22" y="180" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">-50</text>
+      <text x="100" y="186" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="180" text-anchor="middle" fill="#2a3a1a" font-size="10" font-family="Courier New">+50</text>
+    </svg>
+  </div>
+
+  <!-- ENGrpm — eng_rpm 2920(784,16,BE,u)/4 -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgRpm">
+      <defs>
+        <linearGradient id="gRpm" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#1a5aff"/>
+          <stop offset="100%" stop-color="#4a9eff"/>
+        </linearGradient>
+      </defs>
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">ENGrpm</text>
+      <path id="bgRpm" fill="none" stroke="#1a2a3a" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcRpm" fill="none" stroke="url(#gRpm)" stroke-width="10" stroke-linecap="round"/>
+      <line id="barRpm" stroke="#4a9eff" stroke-width="4" stroke-linecap="round"/>
+      <text id="valRpm" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#4a9eff" font-size="52" font-weight="bold" font-family="Courier New">0</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">rpm</text>
+      <text x="22" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="178" text-anchor="middle" fill="#1e3a5a" font-size="10" font-family="Courier New">8k</text>
+    </svg>
+  </div>
+
+  <!-- Psoc (SOC) — PID 015B -->
+  <div class="meter-card">
+    <svg class="m-svg" viewBox="0 0 200 200" id="svgSoc">
+      <text x="100" y="18" text-anchor="middle" fill="#2a5a7a" font-size="10" font-family="Courier New" letter-spacing="2">Psoc  SOC</text>
+      <path id="bgSocLo"   fill="none" stroke="#661100" stroke-width="10" stroke-linecap="round"/>
+      <path id="bgSocNorm" fill="none" stroke="#007755" stroke-width="10" stroke-linecap="round"/>
+      <path id="bgSocHi"   fill="none" stroke="#664400" stroke-width="10" stroke-linecap="round"/>
+      <path id="arcSoc" fill="none" stroke="#0a1520" stroke-width="12" stroke-linecap="butt"/>
+      <line id="barSoc" stroke="#00ffcc" stroke-width="4" stroke-linecap="round"/>
+      <text id="valSoc" x="100" y="105" dominant-baseline="middle" text-anchor="middle" fill="#00ffcc" font-size="52" font-weight="bold" font-family="Courier New">--</text>
+      <text x="100" y="133" text-anchor="middle" fill="#2a5a7a" font-size="11" font-family="Courier New" letter-spacing="1">%</text>
+      <text x="22" y="178" text-anchor="middle" fill="#1e3a2a" font-size="10" font-family="Courier New">0</text>
+      <text x="178" y="178" text-anchor="middle" fill="#1e3a2a" font-size="10" font-family="Courier New">100</text>
+    </svg>
+  </div>
+
+</div>
+
+<!-- TEXT ROW: RunMode / Vsys / RunTime -->
+<div class="sub-row" style="margin-bottom:8px;">
+  <div class="sub-item">
+    <span class="sl">RUN MODE</span>
+    <span class="sv" id="txtMode">--</span>
+  </div>
+  <div class="sub-item">
+    <span class="sl">Vsys</span>
+    <span class="sv" id="txtVsys">--.- <small style="font-size:12px;color:#2a5a7a">V</small></span>
+  </div>
+  <div class="sub-item">
+    <span class="sl">RUNTIME</span>
+    <span class="sv" id="txtTime">--:--:--</span>
+  </div>
+</div>
+</div><!-- /gaugeView -->
+
+<!-- FLOW VIEW: エネルギーフロー図 (BAT/GEN/ENG/TRC) -->
+<div id="flowView" style="display:none;">
+  <svg id="flowSvg" viewBox="0 0 380 600" width="380" height="600"></svg>
+</div>
+
+<!-- CONTROLS: 接続・ログ・DEMO -->
+<div class="hdr">
+  <div class="logo">FL4 OBD MONITOR <span style="font-size:0.6em;opacity:0.6">v20260718c</span></div>
+  <div class="hdr-r">
+    <span class="stt" id="sttTxt">DISCONNECTED</span>
+    <div class="dot" id="dot"></div>
+  </div>
+</div>
+
+<button class="conn-btn" id="connBtn" onclick="toggleConnect()">[ BLUETOOTH 接続 ]</button>
+
+<div class="log-wrap">
+  <div class="log" id="logBox">
+    <span style="color:#1a5a3a">▶ Web Bluetooth 準備完了 — Chrome + HTTPS必須</span><br>
+  </div>
+</div>
+
+<button class="conn-btn" id="recBtn" onclick="toggleRec()">● REC</button>
+
+<div style="display:flex;gap:6px;margin-bottom:0;">
+  <button class="conn-btn" id="gpsBtn" onclick="toggleGps()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ GPS ]</button>
+  <button class="conn-btn" id="imuBtn" onclick="toggleImu()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ IMU ]</button>
+  <button class="conn-btn" id="demoBtn" onclick="toggleDemo()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ DEMO ]</button>
+  <a href="viewer.html" target="_blank" class="conn-btn" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;">[ LOG VIEWER ]</a>
+</div>
+</div><!-- /app -->
+
+<script>
+// ─── Log ─────────────────────────────────────────────────
+let logBuffer = [];
+let logRecording = false;
+let gpsEnabled = false;   // GPS(GPX)記録トグル。状態は localStorage 永続
+let gpsWatchId = null;    // watchPosition のID
+let gpsBuffer = [];       // {time(ISO), lat, lon, ele, spd, acc}
+
+function log(msg, cls) {
+  const now = new Date();
+  const ts = now.toISOString().slice(11, 23);
+  if (logRecording) logBuffer.push({ ts, cls: cls || '', msg });
+  const box = document.getElementById('logBox');
+  const s = document.createElement('span');
+  if (cls) s.className = cls;
+  s.textContent = '[' + ts + '] ' + msg;
+  box.appendChild(s);
+  box.appendChild(document.createElement('br'));
+  box.scrollTop = box.scrollHeight;
+  while (box.children.length > 200) {
+    box.removeChild(box.firstChild);
+    box.removeChild(box.firstChild);
+  }
+}
+
+function toggleRec() {
+  const btn = document.getElementById('recBtn');
+  if (!logRecording) {
+    logBuffer = [];
+    logRecording = true;
+    btn.textContent = '■ STOP';
+    btn.classList.add('rec');
+    log('--- REC START ---', 'ok');
+    syncGpsRecording();
+    syncImuRecording();
+  } else {
+    logRecording = false;
+    btn.textContent = '● REC';
+    btn.classList.remove('rec');
+    syncGpsRecording();
+    syncImuRecording();
+    if (logBuffer.length === 0) return;
+    const lines = logBuffer.map(e => `[${e.ts}] [${(e.cls||'   ').padEnd(3)}] ${e.msg}`);
+    const text = 'FL4 OBD MONITOR LOG\n' +
+      'Generated: ' + new Date().toISOString() + '\n' +
+      '='.repeat(60) + '\n' + lines.join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'fl4obd_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ─── GPS (GPXトラック記録) ───────────────────────────────
+// トグルON時、REC録画中に watchPosition で座標を溜め、
+// 録画終了時に GPX を書き出す。時刻は toISOString() で他ログと共通。
+function recordingActive() { return logRecording; }
+
+function onGpsFix(pos) {
+  const c = pos.coords;
+  gpsBuffer.push({
+    time: new Date(pos.timestamp).toISOString(),   // 測位時刻(ISO, UTC) = 他ログと同基準
+    lat: c.latitude, lon: c.longitude,
+    ele: (c.altitude != null ? c.altitude : null),
+    spd: (c.speed  != null ? c.speed  : null),      // m/s (端末による)
+    acc: c.accuracy
+  });
+}
+function onGpsErr(e) { log('GPS: ' + e.message, 'err'); }
+
+function startGps() {
+  if (!gpsEnabled || gpsWatchId != null) return;
+  if (!navigator.geolocation) { log('GPS: 非対応ブラウザ', 'err'); return; }
+  gpsBuffer = [];
+  gpsWatchId = navigator.geolocation.watchPosition(onGpsFix, onGpsErr,
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+  log('--- GPS START ---', 'ok');
+}
+function stopGps() {
+  if (gpsWatchId != null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+}
+function exportGpx() {
+  if (gpsBuffer.length === 0) return;
+  const pts = gpsBuffer.map(p => {
+    let s = '<trkpt lat="' + p.lat.toFixed(7) + '" lon="' + p.lon.toFixed(7) + '">';
+    if (p.ele != null) s += '<ele>' + p.ele.toFixed(1) + '</ele>';
+    s += '<time>' + p.time + '</time></trkpt>';
+    return s;
+  }).join('\n');
+  const gpx =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<gpx version="1.1" creator="fl4obd" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+    '<trk><name>fl4obd ' + new Date().toISOString() + '</name><trkseg>\n' +
+    pts + '\n</trkseg></trk>\n</gpx>\n';
+  const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = 'fl4obd_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.gpx';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('GPX ' + gpsBuffer.length + ' pts 保存', 'ok');
+  gpsBuffer = [];
+}
+
+// 録画の開始/終了時に呼ぶ: 録画中はGPS収集、全録画停止でGPX書き出し
+function syncGpsRecording() {
+  if (recordingActive()) { if (gpsEnabled) startGps(); }
+  else { stopGps(); if (gpsEnabled) exportGpx(); }
+}
+
+function toggleGps() {
+  gpsEnabled = !gpsEnabled;
+  localStorage.setItem('gpsLog', gpsEnabled ? '1' : '0');
+  const btn = document.getElementById('gpsBtn');
+  if (btn) { btn.style.borderColor = gpsEnabled ? '#ffaa00' : '#1a3a5a';
+             btn.style.color       = gpsEnabled ? '#ffaa00' : '#2a5a7a'; }
+  log('GPS記録: ' + (gpsEnabled ? 'ON' : 'OFF'), 'ok');
+  if (gpsEnabled && recordingActive()) startGps();
+  else if (!gpsEnabled) stopGps();
+}
+
+// 起動時: localStorage からトグル状態を復元
+(function initGps() {
+  gpsEnabled = localStorage.getItem('gpsLog') === '1';
+  const btn = document.getElementById('gpsBtn');
+  if (btn && gpsEnabled) { btn.style.borderColor = '#ffaa00'; btn.style.color = '#ffaa00'; }
+})();
+
+// ─── IMU (加速度/ジャイロ CSV記録) ───────────────────────
+// トグルON時、REC録画中に devicemotion を購読し生サンプルを溜め、
+// 録画終了時に CSV を書き出す。時刻は toISOString() で他ログ(GPX/.txt)と共通。
+// 車両座標化・慣性/勾配分離・融合は後段(replay/解析)でやる前提＝ここは生データのみ。
+let imuEnabled = false;   // IMU(CSV)記録トグル。localStorage 永続
+let imuBuffer  = [];      // 生 devicemotion サンプル
+
+function onMotion(e) {
+  const ag = e.accelerationIncludingGravity || {};
+  const a  = e.acceleration || {};
+  const r  = e.rotationRate || {};
+  imuBuffer.push({
+    t: new Date().toISOString(),                 // UTC。GPX/.txt と同基準
+    agx: ag.x, agy: ag.y, agz: ag.z,             // 重力込み加速度 [m/s^2]
+    ax: a.x,  ay: a.y,  az: a.z,                 // OS重力除去済み加速度 [m/s^2]
+    rx: r.alpha, ry: r.beta, rz: r.gamma,        // 角速度 [deg/s]
+    dt: e.interval                                // サンプル間隔 [ms]
+  });
+}
+
+// iOS13+ は要許可、Android(対象)は requestPermission 自体が無い＝そのまま許可扱い
+function requestMotionPerm() {
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function') {
+    return DeviceMotionEvent.requestPermission().catch(() => 'denied');
+  }
+  return Promise.resolve('granted');
+}
+
+function startImu() {
+  if (!imuEnabled) return;
+  if (typeof DeviceMotionEvent === 'undefined') { log('IMU: 非対応ブラウザ', 'err'); return; }
+  imuBuffer = [];
+  window.addEventListener('devicemotion', onMotion);
+  log('--- IMU START ---', 'ok');
+}
+function stopImu() {
+  window.removeEventListener('devicemotion', onMotion);
+}
+
+function imuNum(v, d) { return (v == null || isNaN(v)) ? '' : v.toFixed(d); }
+
+function exportImuCsv() {
+  if (imuBuffer.length === 0) return;
+  const head = 't_iso,agx,agy,agz,ax,ay,az,rx,ry,rz,interval';
+  const rows = imuBuffer.map(s =>
+    s.t + ',' +
+    imuNum(s.agx,4)+','+imuNum(s.agy,4)+','+imuNum(s.agz,4)+','+
+    imuNum(s.ax,4)+','+imuNum(s.ay,4)+','+imuNum(s.az,4)+','+
+    imuNum(s.rx,3)+','+imuNum(s.ry,3)+','+imuNum(s.rz,3)+','+
+    imuNum(s.dt,1));
+  const csv = '# fl4obd IMU log (raw)\n' +
+    '# t_iso=UTC(toISOString) / ag=accelIncludingGravity[m/s^2] / a=acceleration[m/s^2] / r=rotationRate[deg/s] / interval[ms]\n' +
+    head + '\n' + rows.join('\n') + '\n';
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = 'fl4obd_imu_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('IMU ' + imuBuffer.length + ' samples 保存', 'ok');
+  imuBuffer = [];
+}
+
+// REC開始/終了に同期: 録画中は収集、停止で CSV 書き出し
+function syncImuRecording() {
+  if (recordingActive()) { if (imuEnabled) startImu(); }
+  else { stopImu(); if (imuEnabled) exportImuCsv(); }
+}
+
+function toggleImu() {
+  imuEnabled = !imuEnabled;
+  localStorage.setItem('imuLog', imuEnabled ? '1' : '0');
+  const btn = document.getElementById('imuBtn');
+  if (btn) { btn.style.borderColor = imuEnabled ? '#ffaa00' : '#1a3a5a';
+             btn.style.color       = imuEnabled ? '#ffaa00' : '#2a5a7a'; }
+  log('IMU記録: ' + (imuEnabled ? 'ON' : 'OFF'), 'ok');
+  if (imuEnabled) {
+    requestMotionPerm().then(st => {
+      if (st !== 'granted') log('IMU: センサ許可が下りず', 'err');
+      else if (recordingActive()) startImu();
+    });
+  } else {
+    stopImu();
+  }
+}
+
+(function initImu() {
+  imuEnabled = localStorage.getItem('imuLog') === '1';
+  const btn = document.getElementById('imuBtn');
+  if (btn && imuEnabled) { btn.style.borderColor = '#ffaa00'; btn.style.color = '#ffaa00'; }
+})();
+
+// ─── SVGメーター描画ヘルパー ──────────────────────────────
+// 中心(cx,cy)、半径r、開始角deg_start〜終了角deg_end の弧パスを返す
+// 角度は12時=0、時計回り正
+const CX = 100, CY = 105, R = 72;
+const DEG_START = -140, DEG_END = 140; // 280°弧
+
+function deg2rad(d) { return d * Math.PI / 180; }
+
+function arcPoint(deg) {
+  const r = deg2rad(deg - 90); // SVGはY下向きなので-90補正
+  return { x: CX + R * Math.cos(r), y: CY + R * Math.sin(r) };
+}
+
+function arcPath(deg1, deg2) {
+  const p1 = arcPoint(deg1), p2 = arcPoint(deg2);
+  const span = deg2 - deg1;
+  const large = span > 180 ? 1 : 0;
+  return `M${p1.x.toFixed(2)},${p1.y.toFixed(2)} A${R},${R} 0 ${large},1 ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+}
+
+// 弧の総長さ (280° / 360° × 2πR)
+const ARC_LEN = (280 / 360) * 2 * Math.PI * R;
+const ARC_HALF = ARC_LEN / 2;
+
+// 背景弧を初期化
+function initBgArc(id) {
+  const el = document.getElementById(id);
+  el.setAttribute('d', arcPath(DEG_START, DEG_END));
+}
+['bgRpm','bgSpd','bgPwr','bgPsys','bgPeng'].forEach(initBgArc);
+// SOC固定色帯 (円弧に沿って色ゾーンを固定描画)
+document.getElementById('bgSocLo').setAttribute('d',   arcPath(DEG_START, DEG_START + 0.25 * 280));
+document.getElementById('bgSocNorm').setAttribute('d', arcPath(DEG_START + 0.25 * 280, DEG_START + 0.85 * 280));
+document.getElementById('bgSocHi').setAttribute('d',   arcPath(DEG_START + 0.85 * 280, DEG_END));
+
+// 値弧: ratio 0〜1 で左端から右端へ
+function setArc(id, ratio) {
+  ratio = Math.max(0, Math.min(1, ratio));
+  const deg = DEG_START + ratio * 280;
+  const el = document.getElementById(id);
+  if (ratio === 0) { el.setAttribute('d', `M${arcPoint(DEG_START).x},${arcPoint(DEG_START).y}`); return; }
+  el.setAttribute('d', arcPath(DEG_START, deg));
+}
+
+// 双極値弧: ratio -1〜+1、中央(deg=0°相当)から左右に伸びる
+function setBiArc(idP, idN, idBar, idVal, ratio, colP, colN) {
+  ratio = Math.max(-1, Math.min(1, ratio));
+  const center = DEG_START + 140; // 280°の中央 = DEG_START+140
+  const deg = center + ratio * 140;
+  const pP = document.getElementById(idP);
+  const pN = document.getElementById(idN);
+  if (ratio >= 0) {
+    pP.setAttribute('d', ratio > 0 ? arcPath(center, deg) : `M${arcPoint(center).x},${arcPoint(center).y}`);
+    pN.setAttribute('d', `M${arcPoint(center).x},${arcPoint(center).y}`);
+    setBar(idBar, deg, colP);
+    document.getElementById(idVal).setAttribute('fill', colP);
+  } else {
+    pN.setAttribute('d', arcPath(deg, center));
+    pP.setAttribute('d', `M${arcPoint(center).x},${arcPoint(center).y}`);
+    setBar(idBar, deg, colN);
+    document.getElementById(idVal).setAttribute('fill', colN);
+  }
+}
+
+// インジケーターバー: 弧上の点から中心方向に短いバー（半径方向）
+function setBar(id, deg, color) {
+  const r = deg2rad(deg - 90);
+  const cos = Math.cos(r), sin = Math.sin(r);
+  const x1 = CX + (R - 10) * cos, y1 = CY + (R - 10) * sin;
+  const x2 = CX + (R + 10) * cos, y2 = CY + (R + 10) * sin;
+  const el = document.getElementById(id);
+  el.setAttribute('x1', x1.toFixed(2)); el.setAttribute('y1', y1.toFixed(2));
+  el.setAttribute('x2', x2.toFixed(2)); el.setAttribute('y2', y2.toFixed(2));
+  if (color) el.setAttribute('stroke', color);
+}
+
+// 中央マーク初期化 (双極ゲージ用: Pbat/Psys)
+function initCenterMark(id) {
+  const center = DEG_START + 140;
+  const r = deg2rad(center - 90);
+  const cos = Math.cos(r), sin = Math.sin(r);
+  const el = document.getElementById(id);
+  el.setAttribute('x1', (CX + (R-8)*cos).toFixed(2));  el.setAttribute('y1', (CY + (R-8)*sin).toFixed(2));
+  el.setAttribute('x2', (CX + (R+8)*cos).toFixed(2));  el.setAttribute('y2', (CY + (R+8)*sin).toFixed(2));
+}
+initCenterMark('centerPwr');
+initCenterMark('centerPsys');
+
+// ─── Vehicle data ─────────────────────────────────────────
+const D = { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1 };
+// off90(bit720) = gen_trq(発電機トルク, 生信号)。2920単独で独立に物理換算する。
+// ENG-GEN同軸ゆえ定常の torque balance 比例部分: eng_trq_Nm ≈ gen_trq_Nm。
+// 走行ログ散布図(eng_trq vs gen_trq)の比例係数 |gen_trq|/eng_trq ≈ 0.535 と
+// eng_trqスケール 0.02Nm/LSB から: gen_trqスケール = 0.02/0.535 ≈ 0.0374 Nm/LSB。
+// ※散布図のx切片(≈300LSB)は機械損失(フリクション)。比例部分のみ換算に使い、切片は除外。
+// P_gen[kW] = gen_trq_Nm * eng_rpm * (2π/60)/1000  (同軸: gen_rpm=eng_rpm)。発電時 gen_trq<0 → 符号反転で正。
+const GEN_TRQ_NM = 0.02 / 0.535;                  // ≈0.0374 Nm/LSB
+const GEN_PWR_COEF = GEN_TRQ_NM * (2*Math.PI/60) / 1000;  // ≈3.92e-6  (|gen_trq|*eng_rpm → kW)
+let systemVolt = 0;
+// RunMode コード → ラベル
+// off77 の値は【10進】(20=EV/40=SERIES/50,70=DIRECT/60,30,10=TRANS)。※0x14=20 等
+const MODE_LABELS = { 20:'EV', 40:'SERIES', 50:'DIRECT', 70:'DIRECT', 60:'TRANS', 30:'TRANS', 10:'TRANS' };
+let runTimeBase = 0;
+let syncTimeMs  = null;
+
+function getRtSec() {
+  if (syncTimeMs === null) return null;
+  return runTimeBase + Math.floor((Date.now() - syncTimeMs) / 1000);
+}
+
+// ─── Render ───────────────────────────────────────────────
+function render() {
+  // Vsp 0-180 (svgSpd を再利用)
+  const spdR = Math.max(0, Math.min(D.vsp, 180)) / 180;
+  setArc('arcSpd', spdR);
+  setBar('barSpd', DEG_START + spdR * 280, '#00ff88');
+  document.getElementById('valSpd').textContent = Math.round(D.vsp);
+
+  // Psys 双極 ±140 kW
+  const psysR = Math.max(-1, Math.min(D.psys / 140, 1));
+  setBiArc('arcPsysP', 'arcPsysN', 'barPsys', 'valPsys', psysR, '#00e5ff', '#cc44ff');
+  document.getElementById('valPsys').textContent = D.psys.toFixed(1);
+
+  // Peng 0-110 kW
+  const pengR = Math.max(0, Math.min(D.peng, 110)) / 110;
+  setArc('arcPeng', pengR);
+  setBar('barPeng', DEG_START + pengR * 280, '#ff5533');
+  document.getElementById('valPeng').textContent = D.peng.toFixed(1);
+
+  // Pbat 双極 -50..+50 kW (svgPwr を再利用)
+  const pwrR = Math.max(-1, Math.min(D.pbat / 50, 1));
+  setBiArc('arcPwrP', 'arcPwrN', 'barPwr', 'valPwr', pwrR, '#ffaa00', '#cc44ff');
+  document.getElementById('valPwr').textContent = D.pbat.toFixed(1);
+
+  // ENGrpm 0-8000 (svgRpm を再利用)
+  const rpmR = Math.max(0, Math.min(D.engRot, 8000)) / 8000;
+  setArc('arcRpm', rpmR);
+  setBar('barRpm', DEG_START + rpmR * 280, '#4a9eff');
+  document.getElementById('valRpm').textContent = Math.round(D.engRot);
+
+  // Psoc 0-100
+  const socValid = !isNaN(D.soc);
+  const socR = socValid ? Math.max(0, Math.min(D.soc, 100)) / 100 : 0;
+  // HEV自然域: 25〜85%。域外は警告色
+  const nc = !socValid ? '#2a5a7a'
+           : D.soc < 25 ? '#ff4444'   // 枯渇域
+           : D.soc > 85 ? '#ffaa00'   // 過充電域
+           : '#00ffcc';               // 正常域
+  // 未達部分オーバーレイ: SOC位置から終端まで暗くする
+  const socDeg = DEG_START + socR * 280;
+  const arcSocEl = document.getElementById('arcSoc');
+  arcSocEl.setAttribute('d', socR >= 1
+    ? `M${arcPoint(DEG_END).x.toFixed(2)},${arcPoint(DEG_END).y.toFixed(2)}`
+    : arcPath(socDeg, DEG_END));
+  setBar('barSoc', socDeg, nc);
+  const socEl = document.getElementById('valSoc');
+  socEl.textContent = socValid ? D.soc.toFixed(1) : '--';
+  socEl.setAttribute('fill', nc);
+
+  // Text row: RunMode
+  const dm = (D.dispMode >= 0) ? D.dispMode : D.runMode;   // 遷移ホールド後のモード
+  document.getElementById('txtMode').textContent =
+    (dm >= 0 && MODE_LABELS[dm]) ? MODE_LABELS[dm]
+    : (dm >= 0 ? '0x' + dm.toString(16).toUpperCase() : '--');
+
+  // Text row: Vsys (12V)
+  document.getElementById('txtVsys').innerHTML =
+    systemVolt ? systemVolt.toFixed(1) + ' <small style="font-size:12px;color:#2a5a7a">V</small>'
+               : '--.- <small style="font-size:12px;color:#2a5a7a">V</small>';
+
+  // Text row: RunTime
+  const rtSec = getRtSec();
+  if (rtSec === null) {
+    document.getElementById('txtTime').textContent = '--:--:--';
+  } else {
+    const h = Math.floor(rtSec / 3600);
+    const m = Math.floor((rtSec % 3600) / 60);
+    const s = rtSec % 60;
+    document.getElementById('txtTime').textContent =
+      String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  }
+
+  if (currentView === 'flow') drawFlow();
+}
+
+// ─── エネルギーフロー図 (BAT/GEN/ENG/TRC + 車輪) ───────────
+let currentView = 'gauge';
+function setView(v){
+  currentView = v;
+  document.getElementById('gaugeView').style.display = (v==='gauge')?'':'none';
+  document.getElementById('flowView').style.display  = (v==='flow') ?'':'none';
+  document.getElementById('tabGauge').classList.toggle('active', v==='gauge');
+  document.getElementById('tabFlow').classList.toggle('active',  v==='flow');
+  if (v==='flow') drawFlow();
+}
+
+// ─── スワイプで GAUGE ⇄ FLOW 切替（タブと併用） ─────────────
+(function(){
+  const VIEWS = ['gauge','flow'];
+  let x0=null, y0=null;
+  function onStart(e){ const t=e.changedTouches[0]; x0=t.clientX; y0=t.clientY; }
+  function onEnd(e){
+    if(x0==null) return;
+    const t=e.changedTouches[0], dx=t.clientX-x0, dy=t.clientY-y0;
+    x0=null;
+    if(Math.abs(dx)<50 || Math.abs(dx)<Math.abs(dy)*1.2) return;  // 横方向の明確なスワイプのみ
+    const i=VIEWS.indexOf(currentView);
+    const ni = dx<0 ? i+1 : i-1;                                  // 左スワイプ=次(FLOW), 右=前(GAUGE)
+    if(ni>=0 && ni<VIEWS.length && ni!==i) setView(VIEWS[ni]);
+  }
+  for(const id of ['gaugeView','flowView']){
+    const el=document.getElementById(id);
+    el.addEventListener('touchstart', onStart, {passive:true});
+    el.addEventListener('touchend',   onEnd,   {passive:true});
+  }
+})();
+
+const FNS='http://www.w3.org/2000/svg';
+function fEl(tag,attrs,parent){const e=document.createElementNS(FNS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+const FX_M='#ff9a44', FX_E='#00e5ff', FX_R='#25e0a0', FX_A='#c9a0ff';  // 機械/電気/回生/補機
+// 縦長 viewBox 380x600。中央スパイン 車輪→MOT→bus→BAT, 左 ENG/GEN, 右 AUX/AC
+const fWX=190,fWY=58, fEX=20,fEY=185, fTX=142,fTY=185, fGX=20,fGY=390, fJX=190,fJY=418, fBX=142,fBY=512, fAX=264,fAY=390, fBW=96,fBH=56;
+function fDefs(svg){
+  const d=fEl('defs',{},svg);
+  for(const [id,c] of [['fah_mech',FX_M],['fah_elec',FX_E],['fah_regen',FX_R],['fah_aux',FX_A]]){
+    const m=fEl('marker',{id,markerWidth:2.6,markerHeight:2.4,refX:2.3,refY:1.2,orient:'auto',markerUnits:'strokeWidth'},d);
+    fEl('path',{d:'M0 0 L2.6 1.2 L0 2.4 Z',fill:c},m);
+  }
+}
+function fArrow(svg,pts,kind,active,kw,lx,ly,col,anchor){
+  const color = col || (kind==='mech'?FX_M:kind==='elec'?FX_E:kind==='aux'?FX_A:FX_R);
+  const mk = {[FX_M]:'fah_mech',[FX_E]:'fah_elec',[FX_R]:'fah_regen',[FX_A]:'fah_aux'}[color]||'fah_elec';
+  const mag = (kw!=null)?Math.abs(kw):0;
+  const w = active ? Math.max(3.6, Math.min(2.4+mag*0.18,15)) : 2.6;
+  const d = pts.map((p,i)=>(i?'L':'M')+p[0]+' '+p[1]).join(' ');
+  fEl('path',{d,fill:'none',stroke:color,'stroke-width':w,'stroke-linecap':'round','stroke-linejoin':'round','marker-end':'url(#'+mk+')',opacity:active?1:0.15},svg);
+  if(kw!=null){const t=fEl('text',{x:lx,y:ly,'text-anchor':anchor||'middle','font-size':28,'font-weight':'bold','font-family':'Courier New',fill:color,opacity:active?1:0.15},svg);t.textContent=kw.toFixed(1);}
+}
+function fNode(svg,x,y,label,sub,on,hot,subcol){
+  const g=fEl('g',{opacity:on?1:0.45},svg);
+  fEl('rect',{x,y,width:fBW,height:fBH,rx:7,fill:'#111a24',stroke:on?'#4a6a80':'#2a3a4a','stroke-width':1.6},g);
+  fEl('text',{x:x+fBW/2,y:y+(hot?24:31),'text-anchor':'middle','font-size':19,'font-weight':'bold','font-family':'Courier New',fill:'#dfefff'},g).textContent=label;
+  fEl('text',{x:x+fBW/2,y:y+46,'text-anchor':'middle','font-size':hot?19:10,'font-family':'Courier New','font-weight':hot?'bold':'normal',fill:hot?(subcol||'#9fe8ff'):'#5a7a90'},g).textContent=sub;
+}
+function fWheel(svg,x,y,on,spd){
+  const g=fEl('g',{opacity:on?1:0.45},svg);
+  fEl('circle',{cx:x,cy:y,r:20,fill:'none',stroke:'#889','stroke-width':3.5},g);
+  fEl('circle',{cx:x,cy:y,r:5,fill:'#889'},g);
+  fEl('text',{x:x-32,y:y+6,'text-anchor':'end','font-size':11,fill:'#889'},g).textContent='車輪';
+  if(spd!=null&&!isNaN(spd)){fEl('text',{x:x+30,y:y+8,'text-anchor':'start','font-size':24,'font-weight':'bold','font-family':'Courier New',fill:'#9fe8ff'},svg).textContent=Math.round(spd)+' km/h';}
+}
+// モード遷移ホールド(ルールA): 遷移コード10/30/60を直前の安定モードで埋める
+let stableMode = -1;
+function updateStableMode(m){
+  if(m===20||m===40||m===50||m===70) stableMode=m;
+  else if(m===10 && stableMode===20) stableMode=40;                                    // EV→(10)→SER 確定
+  else if(m===30 && (stableMode===40||stableMode===50||stableMode===70)) stableMode=20; // SER/DIR→(30)→EV 確定
+  // 60・その他 は直前ホールド
+  return stableMode;
+}
+function drawFlow(){
+  const svg=document.getElementById('flowSvg');
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  fDefs(svg);
+  const mode=(D.dispMode>=0)?D.dispMode:D.runMode;
+  const modeLabel=(mode>=0&&MODE_LABELS[mode])?MODE_LABELS[mode]:'--';
+  const isDirect=(mode===50||mode===70), isSeries=(mode===40);
+  const peng=D.peng||0, pgen=D.pgen||0, pbat=D.pbat||0, pdrive=D.pdrive||0;
+  const regen = pdrive < -0.1;
+  const on=(v)=>Math.abs(v)>0.1;
+  const genGen = pgen > 0.1;              // GEN発電 (ENG→GEN→bus)
+  const genMot = pgen < -0.1;             // GEN力行 (bus→GEN→ENG): エンブレ廃電 or 始動クランキング
+  const genMag = Math.abs(pgen);
+  // エンブレ廃電: 回生中のGEN力行(genMot)が本質トリガー。SOC>=85 は
+  // 「それ未満では回生中にGEN力行しない」前提の緩いガード=始動クランキング誤爆防止。
+  // (実際の廃電はもっと高SOCから入る様子だが経験則につき閾値は暫定)
+  const dump = regen && genMot && D.soc >= 85;
+  // フロー算出 + AUX(電気バス収支の残差 = 補機/DC-DC/AC)
+  let trcWheel, busTrc;
+  const engWheel = isDirect ? peng : 0;   // ENG機械直結→車輪(直結時)
+  if(regen)        { trcWheel=-pdrive; busTrc=-pdrive; }
+  else if(isDirect){ trcWheel=Math.max(0,pdrive-peng); busTrc=trcWheel; }
+  else             { trcWheel=pdrive; busTrc=pdrive; }
+  const engGen = genGen ? peng : genMag;  // ENG-GEN軸の機械電力
+  const genBus = genMag;                  // GEN-bus 電気
+  // 電気バス収支(into-bus正): MOT(回生+/力行-)+GEN(発電+/力行-)+BAT(放電+/充電-) = AUX(常out)
+  const aux = Math.max(0, (regen?busTrc:-busTrc) + (genGen?genMag:(genMot?-genMag:0)) + pbat);
+  const batBus=-pbat;   // +:充電(bus→BAT) / -:放電(BAT→bus)
+  // 機械(橙): ENG直結→車輪(上→右) / MOT→車輪(縦) / ENG↔GEN軸(発電=ENG→GEN / 力行=GEN→ENG)
+  fArrow(svg,[[fEX+fBW/2,fEY],[fEX+fBW/2,fWY],[fWX-24,fWY]],'mech',on(engWheel),on(engWheel)?engWheel:null,128,140);
+  if(regen) fArrow(svg,[[fTX+fBW/2,fWY+24],[fTX+fBW/2,fTY]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_R,'end'); // 車輪→MOT(回生)
+  else      fArrow(svg,[[fTX+fBW/2,fTY],[fTX+fBW/2,fWY+24]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_M,'end'); // MOT→車輪(駆動)
+  if(genMot) fArrow(svg,[[fEX+fBW/2,fGY],[fEX+fBW/2,fEY+fBH]],'mech',on(engGen),on(engGen)?engGen:null,128,326,dump?FX_R:FX_M); // GEN→ENG(上)
+  else       fArrow(svg,[[fEX+fBW/2,fEY+fBH],[fEX+fBW/2,fGY]],'mech',on(engGen),on(engGen)?engGen:null,128,326);               // ENG→GEN(下)
+  // 電気: GEN↔bus(発電=GEN→bus / 力行=bus→GEN) / bus↔MOT(上) / BAT↔bus(下) / bus→AUX(右)
+  if(genMot) fArrow(svg,[[fJX-9,fJY],[fGX+fBW,fGY+fBH/2]],'elec',on(genBus),on(genBus)?genBus:null,132,378,dump?FX_R:null); // bus→GEN(左)
+  else       fArrow(svg,[[fGX+fBW,fGY+fBH/2],[fJX-9,fJY]],'elec',on(genBus),on(genBus)?genBus:null,132,378);               // GEN→bus(右)
+  if(regen) fArrow(svg,[[fJX,fTY+fBH],[fJX,fJY-9]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,FX_R,'end');
+  else      fArrow(svg,[[fJX,fJY-9],[fJX,fTY+fBH]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,null,'end');
+  if(batBus>=0) fArrow(svg,[[fJX,fJY+9],[fBX+fBW/2,fBY]],'elec',on(batBus),on(batBus)?batBus:null,286,470,regen?FX_R:FX_E,'end');
+  else          fArrow(svg,[[fBX+fBW/2,fBY],[fJX,fJY+9]],'elec',on(batBus),on(batBus)?-batBus:null,286,470,null,'end');
+  fArrow(svg,[[fJX+9,fJY],[fAX,fAY+fBH/2]],'aux',on(aux),on(aux)?aux:null,286,378,null,'end');
+  fEl('circle',{cx:fJX,cy:fJY,r:8,fill:'#0a0e14',stroke:FX_E,'stroke-width':2.5},svg);
+  fEl('circle',{cx:fJX,cy:fJY,r:3,fill:FX_E},svg);
+  // ノード
+  fNode(svg,fEX,fEY,'ENG',(Math.round(D.engRot)||0)+' rpm',on(peng)||genMot,true);
+  fNode(svg,fTX,fTY,'MOT','P_mot',on(pdrive));
+  fNode(svg,fGX,fGY,'GEN','P_gen',on(pgen));
+  if(dump) fEl('text',{x:fEX+fBW/2,y:fEY-8,'text-anchor':'middle','font-size':14,'font-weight':'bold','font-family':'Courier New',fill:'#ff5544'},svg).textContent='廃電';
+  fNode(svg,fBX,fBY,'BAT',isNaN(D.soc)?'SOC --':'SOC '+D.soc.toFixed(0)+'%',true,true);
+  fNode(svg,fAX,fAY,'AUX/AC',on(aux)?aux.toFixed(1)+'kW':'--',on(aux),true,FX_A);
+  fWheel(svg,fWX,fWY,on(trcWheel)||on(engWheel),D.vsp);
+  // MODE (ENG/MOTと同じ高さ=上段右)
+  const mc={EV:FX_E,SERIES:FX_E,DIRECT:FX_M}[modeLabel]||'#cfe';
+  fEl('text',{x:312,y:fEY+8,'text-anchor':'middle','font-size':12,'font-family':'Courier New',fill:'#5a7a90','letter-spacing':2},svg).textContent='MODE';
+  fEl('text',{x:312,y:fEY+38,'text-anchor':'middle','font-size':26,'font-weight':'bold','font-family':'Courier New',fill:mc},svg).textContent=modeLabel;
+}
+
+// ─── ELM327 レスポンスパーサー ────────────────────────────
+//
+// 【実ログから判明したフォーマット】
+//   ATS0を送っているがこのELM327はスペースなし・8バイト固定長で返す。
+//   1フレーム = 16文字(hex) = 8バイト固定。複数フレームは連結。
+//
+//   シングルフレーム例:
+//     "410D0055555555"  → [41][0D][00][55][55][55][55] + 末尾パッド
+//      └─ SID=0x41, PID=0x0D, data[0]=0x00
+//
+//   マルチフレーム例(PID 9A):
+//     "008 0:419A07004245 1:000D55555555"
+//      └─ ELM327独自フォーマット: "バイト数 0:FF行 1:CF行 ..."
+//         0:行 → First Frame ペイロード (SID PID d0 d1 d2 d3 d4)
+//         1:行 → Consecutive Frame ペイロード (d5 d6 d7 d8 d9 dA dB)
+//
+// 【取得するPIDと変換式】
+//   PID 0x0C  engRot = (A<<8|B) / 4.0        [rpm]
+//   PID 0x0D  vsp    = A                      [km/h]
+//   PID 0x5B  soc    = A * 100.0 / 255.0      [%]
+//   PID 0x1F  runtime= (A<<8|B)               [sec]
+//   PID 0x9A  vbat   = (A<<8|B) / 64.0        [V]   ※マルチフレーム
+//             ibat   = signed16(C<<8|D) * 0.1 [A]
+
+// スペースなし連結hex文字列を16文字(8バイト)ずつ分割してバイト配列リストに変換
+// "410D0055555555410C0000555555" → [[0x41,0x0D,...],[0x41,0x0C,...]]
+function splitFrames(hexStr) {
+  const frames = [];
+  // 16文字 = 8バイト = 1 CAN フレーム
+  for (let i = 0; i + 16 <= hexStr.length; i += 16) {
+    const chunk = hexStr.slice(i, i + 16);
+    const bytes = [];
+    for (let j = 0; j < 16; j += 2)
+      bytes.push(parseInt(chunk.slice(j, j + 2), 16));
+    frames.push(bytes);
+  }
+  // 末尾に16文字に満たない残りがある場合も処理
+  const rem = hexStr.length % 16;
+  if (rem >= 4) {
+    const chunk = hexStr.slice(hexStr.length - rem);
+    const bytes = [];
+    for (let j = 0; j + 1 < chunk.length; j += 2)
+      bytes.push(parseInt(chunk.slice(j, j + 2), 16));
+    frames.push(bytes);
+  }
+  return frames;
+}
+
+// OBD-II Service 01 シングルフレーム応答をデコード
+// bytes[0]=0x41, bytes[1]=PID, bytes[2..]=data (0x55はパッド、無視)
+function decodeService01(bytes) {
+  if (bytes[0] !== 0x41) return;
+  const pid  = bytes[1];
+  const d    = bytes; // d[2], d[3], ... がデータバイト
+  // d[2]以降がデータバイト (スケッチのbuf[3]以降に対応)
+  switch (pid) {
+    case 0x0C: // engRot = (buf[3]<<8|buf[4]) / 4.0
+      D.engRot = ((d[2] << 8) | d[3]) / 4.0; break;
+    case 0x0D: // vsp = buf[3]
+      D.vsp = d[2]; break;
+    case 0x5B: // soc = buf[3] * 100.0 / 255.0
+      D.soc = d[2] * 100.0 / 255.0; break;
+    case 0x05: // tw = buf[3] - 40.0
+      D.tw = d[2] - 40.0; break;
+    case 0x3C: // tcat = (buf[3]<<8|buf[4]) / 10.0 - 40.0
+      D.tcat = ((d[2] << 8) | d[3]) / 10.0 - 40.0; break;
+    case 0x1F: // runtime = buf[3]<<8|buf[4]
+      runTimeBase = (d[2] << 8) | d[3];
+      syncTimeMs  = Date.now(); break;
+    case 0x42: // Control Module Voltage = (A*256+B)/1000 [V]
+      systemVolt = ((d[2] << 8) | d[3]) / 1000.0; break;
+    case 0x67: // Engine coolant temp (multi-sensor) A=bitmap B=sensor1 C=sensor2
+      if (d[2] & 0x01) D.engTemp = d[3] - 40; break;
+    case 0x3C: // Catalyst temp = (A*256+B)/10 - 40 [℃]
+      D.catTemp = ((d[2] << 8) | d[3]) / 10.0 - 40.0; break;
+    case 0x68: // Intake air temp (multi-sensor) A=bitmap B=sensor1
+      if (d[2] & 0x01) D.intTemp = d[3] - 40; break;
+  }
+}
+
+// ─── Service 22 DID (ECU 0x07) パース ─────────────────────
+// 再組立て後の応答: 62 29 XX <payload...>  (XX=DID下位)
+// フィールドマップの byte offset N → 応答byte index = N+2
+function parse22_2920(hex) {
+  if (hex.length < 204) return;              // byte100(eng_rpm) まで必要
+  const u16 = i => parseInt(hex.substr(i * 2, 4), 16);
+  const s16 = i => { const v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; };
+  const u8  = i => parseInt(hex.substr(i * 2, 2), 16);
+  const vsp    = u8(15);             // 車速[km/h] = spd_echo (start104,len8)
+  const engRpm = u16(100) / 4;       // eng_rpm  2920(784,16,BE,u) → byte98
+  const pbat   = s16(86)  * 0.0100;  // batt_pwr 2920(672,16,BE,s) → byte84
+  const engTrq = s16(96);            // eng_trq  2920(752,16,BE,s) → byte94
+  const drvTrq = s16(90);            // drv_trq3 2920(704,16,BE,s) → byte88
+  const genTrq = s16(92);            // gen_trq  2920(720,16,BE,s) → byte90 ※torque(発電時<0)
+  const mode   = u8(79);             // mode     2920(616, 8,flag) → byte77 ※値は10進(20/40/50…)
+  D.vsp     = vsp;
+  D.engRot  = engRpm;
+  D.pbat    = pbat;
+  D.runMode = mode;
+  D.dispMode = updateStableMode(mode);                // モード遷移ホールド(10/30/60を吸収)
+  D.peng = 2.09e-6 * engTrq * engRpm;                 // エンジン機械出力 [kW]
+  D.pgen = GEN_PWR_COEF * (-genTrq) * engRpm;         // 発電機出力 [kW] (発電=正, 2920単独)
+  D.pdrive = 0.000147 * drvTrq * vsp;                 // 車輪(TRC)出力 [kW]
+  const isDirect = (mode === 50 || mode === 70);      // 直結のみエンジン分を加算(10進)
+  D.psys = D.pdrive + (isDirect ? D.peng : 0);
+}
+
+// PID 9A マルチフレーム処理
+// 実ログで確認された問題:
+//   FFとCFが">"をまたいで別ブロックに届く場合がある
+//   例: ブロックA末尾 "... 0:419A070042BE"
+//       ブロックB先頭 "1:00045555555555 ..."
+// → pendingFF に FF ペイロードを保存し、次のブロックでCFが来たら結合してデコード
+
+let pendingFF = null; // FFペイロードhex文字列を一時保存
+
+function applyMulti9A(ff_hex, cf_hex) {
+  // J1979-DA PID 0x9A: Hybrid/EV Vehicle System Data (6 data bytes A-F)
+  // ELM327レスポンス FF: [SID=0x41][PID=0x9A][A][B][C][D]
+  //                 CF: [E][F][pad...]
+  // Voltage [V] = (256×C + D) / 64
+  // Current [A] = signed16(256×E + F) × 0.1
+
+  const ff = [];
+  for (let i = 0; i + 1 < ff_hex.length; i += 2)
+    ff.push(parseInt(ff_hex.slice(i, i + 2), 16));
+  if (ff[0] !== 0x41 || ff[1] !== 0x9A) { pendingFF = null; return; }
+
+  D.vbat = ((ff[4] << 8) | ff[5]) / 64.0;
+
+  if (cf_hex && cf_hex.length >= 4) {
+    const cf = [];
+    for (let i = 0; i + 1 < cf_hex.length; i += 2)
+      cf.push(parseInt(cf_hex.slice(i, i + 2), 16));
+
+    // E=cf[0], F=cf[1] → signed16
+    const rawEF = (cf[0] << 8) | cf[1];
+    D.ibat = (rawEF >= 0x8000 ? rawEF - 0x10000 : rawEF) * 0.1;
+    D.pbat = D.vbat * D.ibat * 0.001;
+
+    // デバッグ: 生値を全部ログに出す
+    log('[9A] FF=' + ff_hex +
+        ' A=' + ff[2].toString(16).padStart(2,'0') +
+        ' B=' + ff[3].toString(16).padStart(2,'0') +
+        ' C=' + ff[4].toString(16).padStart(2,'0') +
+        ' D=' + ff[5].toString(16).padStart(2,'0'), 'tx');
+    log('[9A] CF=' + cf_hex.slice(0,4) +
+        ' E=' + cf[0].toString(16).padStart(2,'0') +
+        ' F=' + cf[1].toString(16).padStart(2,'0') +
+        ' rawEF=0x' + rawEF.toString(16) +
+        ' ibat=' + D.ibat.toFixed(1) + 'A' +
+        ' vbat=' + D.vbat.toFixed(1) + 'V', 'tx');
+
+    pendingFF = null;
+  } else {
+    log('[9A] FF only, waiting CF... FF=' + ff_hex, 'tx');
+    pendingFF = ff_hex;
+  }
+}
+
+// 1行から N:hex セグメントを全て抽出して返す
+// 戻り値: { segments: {0: hex, 1: hex, ...}, remainderHex: "後続シングル連結hex" }
+function extractSegments(line) {
+  // ELM327のISO-TP行フォーマット: フレーム0〜9は "N:hex"(コロン付き)だが、
+  // 10以降は "NNhex"(コロン無し・2桁10進+7バイト=16文字) で返すドングルがある。
+  // 両形式をトークン単位で拾い、フレーム番号順に再組立てする。
+  const segments = {};
+  for (const tok of line.trim().split(/\s+/)) {
+    let m;
+    if ((m = tok.match(/^([0-9A-Fa-f]{1,2}):([0-9A-Fa-f]+)$/))) {
+      segments[parseInt(m[1], 16)] = m[2];              // "N:hex"
+    } else if ((m = tok.match(/^(\d\d)([0-9A-Fa-f]{14})$/))) {
+      segments[parseInt(m[1], 10)] = m[2];              // "NN"+7バイト(コロン無し, 10以降)
+    }
+    // それ以外(長さヘッダ "06F" 等)は無視
+  }
+  return { segments, remainder: '' };
+}
+
+// ELM327の1応答ブロック(">"で区切られた単位)をパース
+function parseBlock(block) {
+  const lines = block.split(/\r\n|\r|\n/)
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && l !== '?');
+
+  const segAll = {}; // 全行から N:hex を集約 (ISO-TP マルチフレーム再組立て用)
+
+  for (const line of lines) {
+    if (/^(SEARCHING|NO DATA|ERROR|UNABLE|BUS)/i.test(line)) continue;
+    if (/^[A-Za-z]/.test(line) && !/^[46][0-9A-Fa-f]/i.test(line)) continue;
+
+    // マルチフレーム関連行: "N:hex"(コロン付き 0-9) だけでなく、
+    // このドングルがフレーム10-15を "NN"+7バイト(コロン無し・計16文字) で
+    // 各行単独に返すケースも拾う。拾わないと10-15が捨てられ再組立てが69Bで打ち切られる。
+    if (/\b[0-9A-Fa-f]{1,2}:[0-9A-Fa-f]/.test(line) ||
+        /(^|\s)1[0-5][0-9A-Fa-f]{14}(\s|$)/.test(line)) {
+      const { segments, remainder } = extractSegments(line);
+      Object.assign(segAll, segments);
+      // N:hexの後に続くシングルフレーム連結部分も処理
+      if (remainder.length >= 14 && /^[0-9A-Fa-f]+$/.test(remainder)) {
+        for (const bytes of splitFrames(remainder)) {
+          if (bytes.length >= 3) decodeService01(bytes);
+        }
+      }
+      continue;
+    }
+
+    // 純粋なシングルフレーム連結行 (Service01: 415B/4142/411F 等)
+    const hex = line.replace(/\s+/g, '');
+    if (!/^[0-9A-Fa-f]+$/.test(hex)) continue;
+    for (const bytes of splitFrames(hex)) {
+      if (bytes.length >= 3) decodeService01(bytes);
+    }
+  }
+
+  // 集約したセグメントを昇順連結して再組立て → Service22 応答なら解析
+  const idxs = Object.keys(segAll).map(Number).sort((a, b) => a - b);
+  if (idxs.length) {
+    let full = '';
+    for (const i of idxs) full += segAll[i];
+    if (/^6229/i.test(full)) parse22_2920(full); // 62 29 XX = ReadDataByID 応答
+  }
+}
+
+function onRx(evt) {
+  rxBuf += new TextDecoder().decode(evt.target.value);
+  const parts = rxBuf.split('>');
+  let gotResponse = false;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const block = parts[i];
+    const preview = block.replace(/[\r\n]+/g, ' ').trim();
+    if (preview) log('← ' + preview, 'ok');
+    parseBlock(block);
+    if (pendingWait && block.includes(pendingWait.str)) pendingWait.resolve(block);
+    gotResponse = true;
+  }
+  rxBuf = parts[parts.length - 1];
+  if (gotResponse) stallCount = 0;   // 応答が来た＝リンク生存
+  if (gotResponse && connected) sendNextPid();
+}
+// ─── Screen Wake Lock ────────────────────────────────────
+let wakeLock = null;
+
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+  } catch(e) {}
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+// ページが再表示されたとき（通知バーを開けて戻るなど）に再取得
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  requestWakeLock();                       // 非表示中に解放されたウェイクロックを再取得
+  if (reconnecting || !connected) return;  // 再接続中/未接続はそれぞれの処理に委ねる
+  // バックグラウンドでスロットルされ停止したポーリングを明示的に再始動。
+  // リンクが実は切れていれば 無応答→ストール検出→forceReconnect が拾う。
+  stallCount = 0;
+  clearTimeout(pollWatchdog);
+  sendNextPid();
+});
+
+// ─── BLE ──────────────────────────────────────────────────
+let bleDevice = null, bleChar = null, connected = false;
+let rxBuf = '', pollWatchdog = null, demoTimer = null;
+// 自動再接続 / ストール検出
+let userDisc = false;      // [切断する]ボタンによる手動切断か
+let reconnecting = false;  // 自動再接続ループ実行中ガード
+let stallCount = 0;        // 連続無応答回数
+const STALL_LIMIT = 5;     // これ以上(≒7.5s無応答)で能動的に再接続
+
+// 特定文字列を含むブロック（'>'区切り）が届くまで待つ
+let pendingWait = null;
+function waitForResponse(str, timeout) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingWait = null;
+      reject(new Error('timeout: ' + str));
+    }, timeout);
+    pendingWait = {
+      str,
+      resolve(text) { clearTimeout(timer); pendingWait = null; resolve(text); },
+      reject(e)    { clearTimeout(timer); pendingWait = null; reject(e); }
+    };
+  });
+}
+
+async function sendRaw(s) {
+  if (!bleChar) return;
+  log('→ ' + s, 'tx');
+  await bleChar.writeValue(new TextEncoder().encode(s + '\r'));
+}
+
+// ─── ポーリング ───────────────────────────────────────────
+// レスポンス駆動: onRx で '>' 受信 → 即次コマンド送信。
+// 全ECU 0x07 (ATSH18DAF107固定) から取得:
+//   222920 … 全ゲージ(Vsp/Psys/Peng/Pbat/ENGrpm/RunMode)。可能な限り高速、ただし100ms下限ガード
+//   015B   … SOC   1秒ごとに1回だけ差し込む
+//   0142   … 12V   5秒ごとに1回だけ差し込む
+const CMD_2920 = '222920';
+const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
+const SOC_INTERVAL = 3000;     // ms  SOCは変化が遅いので間引き、2920の枠を確保
+const V12_INTERVAL = 10000;    // ms  12Vも同様
+
+let last2920 = 0, lastSoc = 0, lastV12 = 0;
+
+function buildCmdQueue() {
+  // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
+  const now = Date.now();
+  last2920 = 0; lastSoc = 0; lastV12 = 0;
+}
+
+function sendNextPid() {
+  if (!connected) return;
+  clearTimeout(pollWatchdog);
+  const now = Date.now();
+  let cmd;
+  if (now - lastSoc >= SOC_INTERVAL)      { cmd = '015B'; lastSoc = now; }
+  else if (now - lastV12 >= V12_INTERVAL) { cmd = '0142'; lastV12 = now; }
+  else {
+    // 2920 ホットループ + 100ms下限ガード
+    const wait = MIN_2920_INTERVAL - (now - last2920);
+    if (wait > 0) { pollWatchdog = setTimeout(sendNextPid, wait); return; }
+    cmd = CMD_2920; last2920 = now;
+  }
+  try { sendRaw(cmd); } catch(e) { log('✗ send err: ' + e.message, 'e'); }
+  // 無応答フォールバック(2920マルチフレームは重いので長め)
+  pollWatchdog = setTimeout(onPollTimeout, 1500);
+}
+
+// 応答が1.5s来なかった時。連続 STALL_LIMIT 回で能動的に再接続
+function onPollTimeout() {
+  if (!connected) return;
+  stallCount++;
+  if (stallCount >= STALL_LIMIT) {
+    log('無応答が続くため再接続します (' + stallCount + '連続)', 'e');
+    stallCount = 0;
+    forceReconnect();
+    return;
+  }
+  sendNextPid();
+}
+
+async function initElm() {
+  // ペンディングコマンドをキャンセルしてUARTバッファをクリア
+  try { await sendRaw('\r'); } catch(e) {}
+  await new Promise(r => setTimeout(r, 200));
+  rxBuf = '';
+
+  // ATZ 送信 → "ELM327" を含む応答が来るまで待つ（タイムアウト2秒）
+  // 応答なし = 前回セッションのゴミが残っていて回復不能 → 例外で呼び出し元へ
+  const atzWait = waitForResponse('ELM327', 2000);
+  try { await sendRaw('ATZ'); } catch(e) {}
+  await atzWait;
+
+  const seq = [
+    ['ATE0',            300],
+    ['ATL0',            300],
+    ['ATS0',            300],
+    ['ATSP0',           500],
+    // TA=0x07 (パワトレECU) を固定ヘッダーに設定。全取得(222920/015B/0142)を0x07から行う
+    ['ATSH18DAF107',    300],
+    ['ATFCSH18DAF107',  200],
+    ['ATFCSD300000',    200],
+    ['ATFCSM1',         200],
+  ];
+  for (const [c, d] of seq) {
+    try { await sendRaw(c); } catch(e) {}
+    await new Promise(r => setTimeout(r, d));
+  }
+
+  // Runtime(PID 0x1F) - 取得できるまで最大3回リトライ
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const p = waitForResponse('411F', 500);
+      await sendRaw('011F');
+      await p;
+      break;
+    } catch(e) {
+      log('RUNTIME 取得失敗 (' + (attempt + 1) + '/3)', 'e');
+      if (attempt < 2) await new Promise(r => setTimeout(r, 200));
+    }
+  }
+}
+
+// ─── BLE接続 ─────────────────────────────────────────────
+// ELM327 BLEドングルは大きく2種類のサービスUUIDを使う:
+//   Type A: 0000fff0-0000-1000-8000-00805f9b34fb  (FFF0/FFF1/FFF2)
+//   Type B: e7810a71-73ae-499d-8c15-faa9aef0c3f2  (iOS用ドングルに多い)
+// Chromeは optionalServices に短縮UUID(例: 'fff0')を渡すと
+// 「bluetooth.com/specifications/gatt/services」のエラーを出すことがある。
+// → 必ずフル128bit UUIDで指定する。
+// → filters に name/namePrefix を並べ、どれにもマッチしない場合の
+//   フォールバックとして acceptAllDevices:true を使う別ルートを用意する。
+
+const SVC_UUIDS = [
+  '0000fff0-0000-1000-8000-00805f9b34fb',
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+];
+
+async function getBleChar(server) {
+  for (const uuid of SVC_UUIDS) {
+    try {
+      const svc   = await server.getPrimaryService(uuid);
+      const chars = await svc.getCharacteristics();
+      log('サービス検出: ' + uuid.slice(4, 8), 'ok');
+
+      let notifyChar = null, writeChar = null;
+      for (const c of chars) {
+        if (c.properties.notify || c.properties.indicate) notifyChar = c;
+        if (c.properties.write  || c.properties.writeWithoutResponse) writeChar = c;
+      }
+      // 一部ドングルは同一キャラクタリスティックで読み書きする
+      if (!writeChar && notifyChar) writeChar = notifyChar;
+      if (!notifyChar && writeChar) notifyChar = writeChar;
+
+      if (notifyChar) {
+        await notifyChar.startNotifications();
+        notifyChar.addEventListener('characteristicvaluechanged', onRx);
+        log('Notify: ' + notifyChar.uuid.slice(4, 8), 'ok');
+      }
+      return writeChar;
+    } catch(e) {
+      // このサービスUUIDは未対応 → 次を試す
+    }
+  }
+  throw new Error('対応サービスが見つかりません (FFF0/E781)');
+}
+
+async function toggleConnect() {
+  // 接続中 or 再接続試行中に押されたら手動切断（自動再接続を止める）
+  if (connected || reconnecting) { userDisc = true; doDisc(); return; }
+
+  userDisc = false;
+  stallCount = 0;
+
+  if (!navigator.bluetooth) {
+    log('✗ Web Bluetooth 非対応', 'e');
+    log('✗ Android Chrome + HTTPS(またはlocalhost)が必要です', 'e');
+    return;
+  }
+
+  setUI('chk');
+  log('Bluetoothスキャン中...', 'tx');
+
+  try {
+    // フル128bit UUIDで optionalServices を指定
+    // filters: よくある名前のドングルを優先
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [
+        { name: 'OBDII'    },
+        { name: 'ELM327'   },
+        { name: 'OBD2'     },
+        { namePrefix: 'OBD'    },
+        { namePrefix: 'ELM'    },
+        { namePrefix: 'IOS'    },
+        { namePrefix: 'Vlink'  },
+        { namePrefix: 'KONNWEI'},
+        { namePrefix: 'iCar'   },
+        { namePrefix: 'Carista'},
+        { services: ['0000fff0-0000-1000-8000-00805f9b34fb'] },
+        { services: ['e7810a71-73ae-499d-8c15-faa9aef0c3f2'] },
+      ],
+      optionalServices: SVC_UUIDS,
+    });
+
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      log('切断されました', 'e');
+      if (userDisc) doDisc();       // 手動切断 → 破棄
+      else attemptReconnect();      // 予期しない切断 → 自動再接続
+    });
+
+    log('接続中: ' + bleDevice.name, 'ok');
+    const server = await bleDevice.gatt.connect();
+    bleChar = await getBleChar(server);
+    if (!bleChar) throw new Error('書き込みキャラクタリスティック未検出');
+
+    stopDemo(); // 接続開始時にデモ停止
+
+    rxBuf = '';
+    await initElm();
+    connected = true;
+    setUI('on');
+    log('ポーリング開始', 'ok');
+    requestWakeLock();
+    buildCmdQueue();
+    sendNextPid();
+
+  } catch (e) {
+    log('✗ ' + e.message, 'e');
+    setUI('off');
+  }
+}
+
+function doDisc() {
+  reconnecting = false;
+  clearTimeout(pollWatchdog);
+  releaseWakeLock();
+  connected = false;
+  if (bleDevice && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
+  bleDevice = bleChar = null;
+  setUI('off');
+}
+
+// ストール検出時: リンクを一度落として自動再接続に乗せる
+function forceReconnect() {
+  if (reconnecting || userDisc) return;
+  clearTimeout(pollWatchdog);
+  connected = false;
+  if (bleDevice && bleDevice.gatt.connected) {
+    bleDevice.gatt.disconnect();          // → gattserverdisconnected → attemptReconnect
+  } else {
+    attemptReconnect();                   // 既に切れている場合は直接
+  }
+}
+
+// bleDevice 参照を保持したまま gatt.connect() で再接続（ユーザー操作不要）。
+// 指数バックオフ 1→2→4→8s で成功するまで（手動切断まで）繰り返す。
+async function attemptReconnect() {
+  if (reconnecting || userDisc || !bleDevice) return;
+  reconnecting = true;
+  connected = false;
+  clearTimeout(pollWatchdog);
+  releaseWakeLock();
+  setUI('rec');
+  let delay = 1000;
+  while (!userDisc && bleDevice) {
+    try {
+      log('再接続 試行...', 'tx');
+      const server = await bleDevice.gatt.connect();
+      bleChar = await getBleChar(server);
+      if (!bleChar) throw new Error('書き込みキャラクタリスティック未検出');
+      rxBuf = ''; stallCount = 0;
+      await initElm();
+      if (userDisc) { doDisc(); return; }
+      connected = true; reconnecting = false;
+      setUI('on');
+      log('再接続 成功', 'ok');
+      requestWakeLock();
+      buildCmdQueue();
+      sendNextPid();
+      return;
+    } catch (e) {
+      log('再接続失敗: ' + e.message + ' (' + (delay / 1000) + 's後に再試行)', 'e');
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 8000);
+    }
+  }
+  reconnecting = false;
+  doDisc();   // 手動切断された or デバイス消失
+}
+
+function setUI(s) {
+  const dot = document.getElementById('dot');
+  const txt = document.getElementById('sttTxt');
+  const btn = document.getElementById('connBtn');
+  const busy = (s === 'chk' || s === 'rec');
+  dot.className = 'dot ' + (s === 'on' ? 'on' : busy ? 'chk' : '');
+  txt.textContent = s === 'on' ? 'CONNECTED' : s === 'chk' ? 'CONNECTING' : s === 'rec' ? 'RECONNECTING' : 'DISCONNECTED';
+  txt.style.color  = s === 'on' ? '#00cc66' : busy ? '#ffaa00' : '#2a5a7a';
+  btn.textContent  = (s === 'on' || s === 'rec') ? '[ 切断する ]' : '[ BLUETOOTH 接続 ]';
+  btn.disabled     = (s === 'chk');   // 再接続中(rec)はボタン有効=中止可能
+}
+
+// ─── DEMO ─────────────────────────────────────────────────
+let dSpd = 0, prevSpd = 0, dSoc = 62, dPhase = 0;
+let demoRunning = false;
+
+// 同定した i-MMD モデルに沿ったデモ:
+// 車速プロファイルから車輪出力を出し、モード(EV/シリーズ/直結/回生)ごとに
+// ENG/GEN/TRC/BAT の各出力を物理整合するよう生成する。※modeは【10進】。
+function demoTick() {
+  dPhase += 0.09;
+  const target = 50 + 48 * Math.sin(dPhase * 0.55);      // 目標車速 2〜98 を緩やかに往復
+  prevSpd = dSpd;
+  dSpd = Math.max(0, dSpd + (target - dSpd) * 0.14);
+  const acc = dSpd - prevSpd;                            // 加速度 [km/h/tick]
+
+  // 車輪(TRC)出力[kW] = 転がり/空気抵抗 + 加速分。減速で負=回生
+  let pdrive = dSpd * 0.18 + acc * 4.5 + (Math.random() - .5) * 1.2;
+  const aux = 1.2;                                        // 補機負荷[kW]
+  let mode, peng = 0, pgen = 0, pbat, rpm;
+
+  if (pdrive < -0.5) {                    // 減速 → 回生 (EV状態)
+    mode = 20; rpm = 0;
+    pbat = pdrive + aux;                  // 充電=|回生|−補機消費 (負=充電)。BAT流入≤回生で保存
+  } else if (dSpd < 22) {                 // 低速 → EV
+    mode = 20; rpm = 0;
+    pbat = pdrive / 0.9 + aux;            // 放電(モータ + 補機)
+  } else if (dSpd > 66 && pdrive < 38) {  // 高速定常 → 直結
+    mode = 50;
+    rpm = 23 * dSpd + Math.random() * 80; // 直結の運動学 (eng_rpm ≈ 23×車速)
+    peng = Math.max(pdrive * 0.82, 10);   // エンジンが車輪を機械直結駆動
+    pbat = (pdrive - peng) / 0.9 + aux;   // 不足はモータ補助(放電)/エンジン余剰なら充電
+    pgen = 0;                             // 直結では発電機は遊ぶ
+  } else {                                // 中速/加速 → シリーズ
+    mode = 40;
+    peng = Math.max(pdrive, 6) + 4 + 3 * Math.sin(dPhase * 1.7);  // 需要 + 充電余裕
+    rpm = 1200 + peng * 42 + Math.random() * 120;                 // 発電動作点(車速と非連動)
+    pgen = peng * 0.95;                   // 発電機がエンジン機械出力を吸収(暖機後 ≈ENG)
+    pbat = pdrive - pgen * 0.9 + aux;     // 差分: 発電>需要なら充電(負)
+  }
+
+  dSoc = Math.max(16, Math.min(92, dSoc - pbat * 0.0015));  // SOC は pbat に応じ緩変動
+  D.vsp = dSpd; D.engRot = rpm; D.runMode = mode; D.dispMode = updateStableMode(mode); D.soc = dSoc;
+  D.peng = peng; D.pgen = pgen; D.pdrive = pdrive; D.pbat = pbat;
+  D.psys = pdrive + (mode === 50 || mode === 70 ? peng : 0);
+  systemVolt = 12.4 + Math.random() * .4;
+  if (syncTimeMs === null) { runTimeBase = 0; syncTimeMs = Date.now(); }
+}
+
+function startDemo() {
+  if (demoTimer) return;
+  demoRunning = true;
+  document.getElementById('demoBtn').textContent = '[ DEMO 停止 ]';
+  document.getElementById('demoBtn').style.color = '#ffaa00';
+  document.getElementById('demoBtn').style.borderColor = '#ffaa00';
+  demoTimer = setInterval(demoTick, 600);
+}
+
+function stopDemo() {
+  demoRunning = false;
+  clearInterval(demoTimer); demoTimer = null;
+  document.getElementById('demoBtn').textContent = '[ DEMO ]';
+  document.getElementById('demoBtn').style.color = '#2a5a7a';
+  document.getElementById('demoBtn').style.borderColor = '#1a3a5a';
+}
+
+function toggleDemo() {
+  if (connected) return; // 接続中はデモ不可
+  demoRunning ? stopDemo() : startDemo();
+}
+
+// ─── 画面回転 ──────────────────────────────────────────────
+// 起動時はデモOFF
+setInterval(render, 200);
+</script>
+</body>
+</html>

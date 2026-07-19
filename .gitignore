@@ -1,0 +1,7 @@
+*.xlsx
+*.xls
+~$*
+logs/
+mockups/
+.DS_Store
+logdata/
