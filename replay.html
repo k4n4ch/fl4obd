@@ -142,9 +142,12 @@ function parseFrames(text){
   if(!baseDate) baseDate=new Date().toISOString().slice(0,10);
   const dayMs=Date.parse(baseDate+'T00:00:00.000Z');
   const out=[]; let prevTod=-1, dayOff=0, lastSoc=NaN;
+  // SOC復元: 実測5Bが来たら再アンカー、その間は 2920 の ∫Pbat で前進させる(較正 -154%/kWh = 6.5Wh/%)。
+  // これで SOC が 5B の疎いポーリング(3秒毎)でなく 2920 の更新に同期して滑らかに動く。
+  const SOC_K=-154; let socR=NaN, prevT=null;
   for(const line of lines){
     const sm=/\b415B([0-9A-Fa-f]{2})/i.exec(line);   // SOC (01_5B): 100*A/255
-    if(sm){ const a=parseInt(sm[1],16); if(!isNaN(a)) lastSoc=+(100*a/255).toFixed(1); }
+    if(sm){ const a=parseInt(sm[1],16); if(!isNaN(a)){ lastSoc=+(100*a/255).toFixed(1); socR=lastSoc; } }  // 実測5Bで再アンカー
     if(line.indexOf('622920')<0) continue;
     const hex=reassemble(line); if(!hex) continue;
     const tm=/\[(\d\d):(\d\d):(\d\d)\.(\d\d\d)\]/.exec(line);
@@ -155,7 +158,10 @@ function parseFrames(text){
     const drv=s16(hex,90), gen=s16(hex,92), eng=s16(hex,96), pbat=s16(hex,86)*0.01;
     const peng=2.09e-6*eng*rpm, pgen=3.92e-6*(-gen)*rpm, pdrive=0.000147*drv*vsp;
     const isDir=(mode===50||mode===70);
-    out.push({t,mode,rpm,vsp,peng,pgen,pdrive,pbat,soc:lastSoc,psys:pdrive+(isDir?peng:0)});
+    // ∫Pbat で socR を前進(前フレームからの経過で積分, 異常gapは無視)
+    if(!isNaN(socR) && prevT!=null){ const dt=(t-prevT)/3600000; if(dt>0&&dt<0.02) socR+=SOC_K*pbat*dt; }
+    prevT=t;
+    out.push({t,mode,rpm,vsp,peng,pgen,pdrive,pbat,soc:isNaN(socR)?lastSoc:+socR.toFixed(2),psys:pdrive+(isDir?peng:0)});
   }
   out.sort((a,b)=>a.t-b.t); return out;
 }
