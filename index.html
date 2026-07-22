@@ -1144,7 +1144,7 @@ async function sendRaw(s) {
 //   0142   … 12V   5秒ごとに1回だけ差し込む
 const CMD_2920 = '222920';
 const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
-const SOC_INTERVAL = 3000;     // ms  SOCは変化が遅いので間引き、2920の枠を確保
+const SOC_INTERVAL = 30000;    // ms  SOCは30秒毎に間引き(∫Pbat内挿で~0.6%精度, 枠を2920に回す)
 const V12_INTERVAL = 10000;    // ms  12Vも同様
 
 let last2920 = 0, lastSoc = 0, lastV12 = 0;
