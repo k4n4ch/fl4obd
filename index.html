@@ -619,6 +619,8 @@ const D = { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0
 const GEN_TRQ_NM = 0.02 / 0.535;                  // ≈0.0374 Nm/LSB
 const GEN_PWR_COEF = GEN_TRQ_NM * (2*Math.PI/60) / 1000;  // ≈3.92e-6  (|gen_trq|*eng_rpm → kW)
 let systemVolt = 0;
+const SOC_K = -154;        // %/kWh  SOC内挿較正(∫Pbatから復元, replayと同一)
+let socPrevT = 0;          // 前回2920フレーム時刻(内挿の積分起点)
 // RunMode コード → ラベル
 // off77 の値は【10進】(20=EV/40=SERIES/50,70=DIRECT/60,30,10=TRANS)。※0x14=20 等
 const MODE_LABELS = { 20:'EV', 40:'SERIES', 50:'DIRECT', 70:'DIRECT', 60:'TRANS', 30:'TRANS', 10:'TRANS' };
@@ -944,6 +946,12 @@ function parse22_2920(hex) {
   const isDirect = (mode === 50 || mode === 70);      // 直結のみエンジン分を加算(10進)
   D.psys = D.pdrive + (isDirect ? D.peng : 0);
   systemVolt = u8(16) * 0.1;                           // 12V系電圧 = byte14(bit112) ×0.1V/LSB (PID42と等価・高レート)
+  // SOC内挿(表示用のみ): 5B(30秒毎)の間を ∫Pbat で前進。5B受信時(case 0x5B)に真値へ再アンカー。
+  // ※ログは生の5B/2920フレームのみ(この D.soc は表示専用で記録しない)。
+  const _now = Date.now();
+  if (!isNaN(D.soc) && socPrevT) { const dt = (_now - socPrevT) / 3600000;
+    if (dt > 0 && dt < 0.02) D.soc = Math.max(0, Math.min(100, D.soc + SOC_K * pbat * dt)); }
+  socPrevT = _now;
 }
 
 // PID 9A マルチフレーム処理
