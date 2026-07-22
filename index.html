@@ -619,7 +619,7 @@ const D = { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0
 const GEN_TRQ_NM = 0.02 / 0.535;                  // ≈0.0374 Nm/LSB
 const GEN_PWR_COEF = GEN_TRQ_NM * (2*Math.PI/60) / 1000;  // ≈3.92e-6  (|gen_trq|*eng_rpm → kW)
 let systemVolt = 0;
-const SOC_K = -154;        // %/kWh  SOC内挿較正(∫Pbatから復元, replayと同一)
+const SOC_K = -192;        // %/kWh  SOC内挿係数(2923真値で最適化した短窓係数。net容量係数154でなく)
 let socPrevT = 0;          // 前回2920フレーム時刻(内挿の積分起点)
 // RunMode コード → ラベル
 // off77 の値は【10進】(20=EV/40=SERIES/50,70=DIRECT/60,30,10=TRANS)。※0x14=20 等

@@ -144,7 +144,7 @@ function parseFrames(text){
   const out=[]; let prevTod=-1, dayOff=0, lastSoc=NaN;
   // SOC復元: 実測5Bが来たら再アンカー、その間は 2920 の ∫Pbat で前進させる(較正 -154%/kWh = 6.5Wh/%)。
   // これで SOC が 5B の疎いポーリング(3秒毎)でなく 2920 の更新に同期して滑らかに動く。
-  const SOC_K=-154; let socR=NaN, prevT=null;
+  const SOC_K=-192; let socR=NaN, prevT=null;   // 短窓の実測係数(2923真値で最適化。net容量係数154でなく)
   for(const line of lines){
     const sm=/\b415B([0-9A-Fa-f]{2})/i.exec(line);   // SOC (01_5B): 100*A/255
     if(sm){ const a=parseInt(sm[1],16); if(!isNaN(a)){ lastSoc=+(100*a/255).toFixed(1); socR=lastSoc; } }  // 実測5Bで再アンカー
