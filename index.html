@@ -943,6 +943,7 @@ function parse22_2920(hex) {
   D.pdrive = 0.000147 * drvTrq * vsp;                 // 車輪(TRC)出力 [kW]
   const isDirect = (mode === 50 || mode === 70);      // 直結のみエンジン分を加算(10進)
   D.psys = D.pdrive + (isDirect ? D.peng : 0);
+  systemVolt = u8(16) * 0.1;                           // 12V系電圧 = byte14(bit112) ×0.1V/LSB (PID42と等価・高レート)
 }
 
 // PID 9A マルチフレーム処理
@@ -1160,7 +1161,7 @@ function sendNextPid() {
   const now = Date.now();
   let cmd;
   if (now - lastSoc >= SOC_INTERVAL)      { cmd = '015B'; lastSoc = now; }
-  else if (now - lastV12 >= V12_INTERVAL) { cmd = '0142'; lastV12 = now; }
+  // 0142(12V)ポーリングは廃止: 12Vは 2920 byte14 で高レート取得(parse22_2920)
   else {
     // 2920 ホットループ + 100ms下限ガード
     const wait = MIN_2920_INTERVAL - (now - last2920);
