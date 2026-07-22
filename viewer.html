@@ -355,6 +355,7 @@ function compute2920(full){
     peng:   2.09e-6 * engTrq * engRpm,
     pgen:   GEN_PWR_COEF * (-genTrq) * engRpm,
     pdrive: 0.000147 * drvTrq * vsp,
+    v12:    u8(16) * 0.1,   // 12V系電圧(2920 byte14=bit112, ×0.1V/LSB, PID42と等価・高レート)
   };
 }
 
@@ -531,6 +532,7 @@ function parseDebugLog(text) {
   const ds = emptyDs();
   let startMs = null;
   let lastSoc = NaN;
+  const sysv2920 = [];   // 12V を 2920(byte14) から拾う。PID42より高レート
   stableMode = -1;   // モード遷移ホールドを先頭からやり直し
 
   function extractMs(line) {
@@ -575,6 +577,7 @@ function parseDebugLog(text) {
         ds.speed.push({  x: t, y: f.vsp });
         ds.rpm.push({    x: t, y: Math.round(f.engRpm) });
         ds.flow.push({ t, dispMode, ...f, soc: lastSoc });
+        if (f.v12) sysv2920.push({ x: t, y: +f.v12.toFixed(2) });
         continue;
       }
     }
@@ -607,6 +610,8 @@ function parseDebugLog(text) {
     if (last.soc != null) lastSoc = last.soc;
     for (const [k, v] of Object.entries(last)) ds[k].push({ x: t, y: v });
   }
+  // 12V: 2920由来(byte14,高レート)と PID42由来 のうち、点数の多い(=サンプリング細かい)方を採用
+  if (sysv2920.length > ds.sysv.length) ds.sysv = sysv2920;
   return ds;
 }
 

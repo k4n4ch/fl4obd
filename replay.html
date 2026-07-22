@@ -101,7 +101,7 @@
     <span class="spd" id="graphBtn">📈 グラフ</span>
     <span id="tlabel">--:-- / --:--</span>
   </div>
-  <div id="graphPanel"><div id="graphCard"><svg id="graphSvg" viewBox="0 0 600 436" preserveAspectRatio="xMidYMid meet"></svg></div></div>
+  <div id="graphPanel"><div id="graphCard"><svg id="graphSvg" viewBox="0 0 600 498" preserveAspectRatio="xMidYMid meet"></svg></div></div>
   <div id="energyPanel"><div id="sumCard">
     <div id="sumTitle">走行サマリー</div>
     <div id="sumMetrics"></div>
@@ -156,12 +156,13 @@ function parseFrames(text){
       if(prevTod>=0 && tod<prevTod-1000) dayOff+=86400000; prevTod=tod; t=dayMs+tod+dayOff; }
     const mode=u8(hex,79), rpm=u16(hex,100)/4, vsp=u8(hex,15);
     const drv=s16(hex,90), gen=s16(hex,92), eng=s16(hex,96), pbat=s16(hex,86)*0.01;
+    const v12=u8(hex,16)*0.1;   // 12V系電圧(2920 byte14=bit112, ×0.1V/LSB。PID42と等価・高レート)
     const peng=2.09e-6*eng*rpm, pgen=3.92e-6*(-gen)*rpm, pdrive=0.000147*drv*vsp;
     const isDir=(mode===50||mode===70);
     // ∫Pbat で socR を前進(前フレームからの経過で積分, 異常gapは無視)
     if(!isNaN(socR) && prevT!=null){ const dt=(t-prevT)/3600000; if(dt>0&&dt<0.02) socR+=SOC_K*pbat*dt; }
     prevT=t;
-    out.push({t,mode,rpm,vsp,peng,pgen,pdrive,pbat,soc:isNaN(socR)?lastSoc:+socR.toFixed(2),psys:pdrive+(isDir?peng:0)});
+    out.push({t,mode,rpm,vsp,peng,pgen,pdrive,pbat,v12,soc:isNaN(socR)?lastSoc:+socR.toFixed(2),psys:pdrive+(isDir?peng:0)});
   }
   out.sort((a,b)=>a.t-b.t); return out;
 }
@@ -503,7 +504,7 @@ function buildGraphSeries(){
   GSER={ elePts:GPS.filter(p=>p.ele!=null).map(p=>({t:p.t,v:p.ele})), gradPts,
          spdPts:OBD.map(o=>({t:o.t,v:o.vsp})), psysPts:OBD.map(o=>({t:o.t,v:o.psys})),
          pbatPts:OBD.map(o=>({t:o.t,v:o.pbat})), rpmPts:OBD.map(o=>({t:o.t,v:o.rpm})),
-         socPts:OBD.map(o=>({t:o.t,v:o.soc})), runs };
+         socPts:OBD.map(o=>({t:o.t,v:o.soc})), v12Pts:OBD.map(o=>({t:o.t,v:o.v12})), runs };
 }
 // 系列の全区間 min/max をキャッシュ。スケールを表示窓に依存させない＝再生中の縦ガタつき防止。
 const _rangeCache=new WeakMap();
@@ -573,6 +574,7 @@ function drawGraph(){
   panel(50, [{pts:GSER.spdPts,color:'#00ff88',label:'車速 km/h'}], {ymin:0});
   panel(62, [{pts:GSER.psysPts,color:'#ffaa00',label:'足軸P kW'},{pts:GSER.pbatPts,color:'#00e5ff',label:'電池P kW'}], {zero:0});
   panel(50, [{pts:GSER.socPts,color:'#ffd24a',label:'SOC %'}]);
+  panel(50, [{pts:GSER.v12Pts,color:'#7fd0ff',label:'12V V'}]);
   panel(50, [{pts:GSER.rpmPts,color:'#4a9eff',label:'ENG rpm'}], {ymin:0});
   gCurBot=y-12;
   for(let k=0;k<=5;k++){ const tt=vT0+(vT1-vT0)*k/5, x=gXAt(tt);
