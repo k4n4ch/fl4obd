@@ -1,0 +1,6 @@
+{
+  "name": "fl4obd-video",
+  "private": true,
+  "type": "module",
+  "description": "ドラレコ映像とOBDログの時刻同期・動画合成ツール"
+}

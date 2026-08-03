@@ -289,11 +289,13 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 <div style="display:flex;gap:6px;margin-bottom:0;">
   <button class="conn-btn" id="gpsBtn" onclick="toggleGps()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ GPS ]</button>
   <button class="conn-btn" id="imuBtn" onclick="toggleImu()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ IMU ]</button>
+  <button class="conn-btn" id="gcalBtn" onclick="startGCal()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ G校正 ]</button>
   <button class="conn-btn" id="demoBtn" onclick="toggleDemo()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ DEMO ]</button>
   <a href="viewer.html" target="_blank" class="conn-btn" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;">[ LOG VIEWER ]</a>
 </div>
 </div><!-- /app -->
 
+<script src="lib/flow.js"></script>
 <script>
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -433,17 +435,148 @@ function toggleGps() {
 let imuEnabled = false;   // IMU(CSV)記録トグル。localStorage 永続
 let imuBuffer  = [];      // 生 devicemotion サンプル
 
+/*
+ * devicemotion の購読は参照カウント制。
+ *  - CSV記録(imuLogging): REC中 かつ [IMU] ON のとき
+ *  - Gボール表示(gSubbed): G校正済み or 校正実行時（RECとは独立。専用トグルは持たない）
+ * 両方が同時に使えるよう、リスナは1本だけ張って用途ごとに分岐する。
+ */
+let imuLogging = false, motionSubs = 0;
+function subMotion(){ if (motionSubs++ === 0) window.addEventListener('devicemotion', onMotion); }
+function unsubMotion(){ if (--motionSubs <= 0) { motionSubs = 0; window.removeEventListener('devicemotion', onMotion); } }
+
 function onMotion(e) {
   const ag = e.accelerationIncludingGravity || {};
   const a  = e.acceleration || {};
   const r  = e.rotationRate || {};
-  imuBuffer.push({
+  if (imuLogging) imuBuffer.push({
     t: new Date().toISOString(),                 // UTC。GPX/.txt と同基準
     agx: ag.x, agy: ag.y, agz: ag.z,             // 重力込み加速度 [m/s^2]
     ax: a.x,  ay: a.y,  az: a.z,                 // OS重力除去済み加速度 [m/s^2]
     rx: r.alpha, ry: r.beta, rz: r.gamma,        // 角速度 [deg/s]
     dt: e.interval                                // サンプル間隔 [ms]
   });
+  if (e.interval) e_interval = e.interval;
+  gFeed(ag, a);   // 未校正なら gFeed 側で早期 return する
+}
+
+/* ═══ スマホIMU → Gボール（ライブ表示） ═══════════════════════
+ * 姿勢の校正は2段。重力方向で2自由度、発進方向で残り1自由度が決まり一意になる。
+ *   ① 停車中に [0点] → accelerationIncludingGravity を平均して up（端末座標の上方向）
+ *   ② 次の発進で、acceleration の up 成分を除いた水平成分を平均して fwd（前方）
+ *   right = fwd × up（up=(0,0,1),fwd=(1,0,0) のとき (0,-1,0)=右）
+ * 前後G = a·fwd / g、左右G = a·right / g（ドラレコIMUと同じ符号規約: +加速 / +右）
+ *
+ * 注意: 坂で0点学習すると重力の前後成分が前後Gに定常的に混ざる（加速度計だけでは
+ * 原理的に分離不可）。OBD車速の d(vsp)/dt と比べた残差 gResid で健全性を監視でき、
+ * この残差は概ね g·sin(勾配) に相当する。平地で校正するのが望ましい。
+ */
+const G0 = 9.80665;
+let e_interval = 60;                     // devicemotion のサンプル間隔[ms]（EMA重み用）
+const GC = { up:null, fwd:null, right:null, stage:'none', buf:[], t0:0, prev:null };
+let gSubbed = false, gx = NaN, gy = NaN, gResid = NaN;   // gSubbed=devicemotion購読済み
+let gVspPrev = NaN, gVspPrevT = 0, gAlongEma = NaN, gDvdtEma = NaN;
+const v3 = {
+  dot:(p,q)=>p[0]*q[0]+p[1]*q[1]+p[2]*q[2],
+  cross:(p,q)=>[p[1]*q[2]-p[2]*q[1], p[2]*q[0]-p[0]*q[2], p[0]*q[1]-p[1]*q[0]],
+  norm:(p)=>{const n=Math.hypot(p[0],p[1],p[2]); return n>1e-6?[p[0]/n,p[1]/n,p[2]/n]:null;},
+};
+function gSaveCal(){
+  try { localStorage.setItem('fl4obd.gcal', JSON.stringify({up:GC.up, fwd:GC.fwd})); } catch(e){}
+}
+function gLoadCal(){
+  try {
+    const j = JSON.parse(localStorage.getItem('fl4obd.gcal')||'null');
+    if (j && j.up && j.fwd) { GC.up=j.up; GC.fwd=j.fwd; GC.right=v3.norm(v3.cross(j.fwd,j.up)); GC.stage='ok'; }
+  } catch(e){}
+}
+function gCalStatusText(){
+  return {none:'未校正', up:'重力学習中…', wait:'発進待ち', fwd:'前方学習中…', ok:'校正済'}[GC.stage] || '';
+}
+// Gボール内に出す案内（何をすれば校正が進むか）
+function gCalHint(){
+  return {none:'[G校正]を押す', up:'停車のまま…', wait:'発進してください', fwd:'計測中…', ok:''}[GC.stage] || '';
+}
+// devicemotion の購読を必要になった時に開始する（[G]トグルは廃止＝校正の意思で判断）
+function ensureGSub(){
+  if (gSubbed) return Promise.resolve(true);
+  return requestMotionPerm().then(st => {
+    if (st !== 'granted') { log('G: センサ許可が下りず', 'err'); return false; }
+    gSubbed = true; subMotion(); return true;
+  });
+}
+// 校正の中止。再校正の途中で止めた場合は前回の校正値に戻す（校正済みを失わない）
+function gAbortCal(reason){
+  if (GC.prev) { GC.up=GC.prev.up; GC.fwd=GC.prev.fwd; GC.right=GC.prev.right; GC.stage='ok'; }
+  else { GC.stage='none'; GC.up=GC.fwd=GC.right=null; }
+  GC.prev=null; GC.buf=[];
+  log('G校正: ' + reason + (GC.stage==='ok' ? '（前回の校正に復帰）' : ''), 'err');
+  updateGBtn();
+}
+function startGCal(){
+  // 「行為」のトグル: 実行中にもう一度押したら中止する
+  if (GC.stage==='up' || GC.stage==='wait' || GC.stage==='fwd') { gAbortCal('中止した'); return; }
+  if ((D.vsp||0) > 0) { log('G: 停車中に押してください', 'err'); return; }
+  ensureGSub().then(ok => {
+    if (!ok) return;
+    GC.prev = (GC.stage==='ok') ? {up:GC.up, fwd:GC.fwd, right:GC.right} : null;   // 復元用に退避
+    GC.stage='up'; GC.buf=[]; GC.t0=Date.now(); GC.up=GC.fwd=GC.right=null; D.gx=D.gy=null;
+    log('G: 重力方向を学習中… 停車のまま2秒', 'tx');
+    updateGBtn();
+  });
+}
+function gFeed(ag, a){
+  const now = Date.now();
+  // ① 重力方向（停車中に2秒平均）
+  if (GC.stage==='up') {
+    if ((D.vsp||0) > 0) { gAbortCal('動いたので中止。停車中にやり直し'); return; }
+    if (ag.x!=null) GC.buf.push([ag.x,ag.y,ag.z]);
+    if (now-GC.t0 > 2000) {
+      if (GC.buf.length < 10) { GC.stage='none'; log('G: 加速度が取得できない', 'err'); }
+      else {
+        const m=GC.buf.reduce((s,v)=>[s[0]+v[0],s[1]+v[1],s[2]+v[2]],[0,0,0]).map(x=>x/GC.buf.length);
+        GC.up=v3.norm(m); GC.stage='wait'; GC.buf=[]; GC.t0=now;
+        log('G: 重力方向OK（|g|='+Math.hypot(m[0],m[1],m[2]).toFixed(2)+'）→ 前進で発進してください', 'ok');
+      }
+      updateGBtn();
+    }
+    return;
+  }
+  // ② 前方（発進時の水平加速度を1.5秒平均）
+  if (GC.stage==='wait' && (D.vsp||0) > 0) { GC.stage='fwd'; GC.buf=[]; GC.t0=now; }
+  if (GC.stage==='fwd') {
+    if (a.x!=null) {
+      const h=[a.x,a.y,a.z]; const k=v3.dot(h,GC.up);
+      GC.buf.push([h[0]-k*GC.up[0], h[1]-k*GC.up[1], h[2]-k*GC.up[2]]);   // up成分を除去
+    }
+    if (now-GC.t0 > 1500) {
+      const m=GC.buf.reduce((s,v)=>[s[0]+v[0],s[1]+v[1],s[2]+v[2]],[0,0,0]).map(x=>x/Math.max(GC.buf.length,1));
+      if (Math.hypot(m[0],m[1],m[2]) < 0.3) { GC.stage='wait'; GC.buf=[]; GC.t0=now; log('G: 加速が弱すぎ。もう一度発進を', 'err'); }
+      else { GC.fwd=v3.norm(m); GC.right=v3.norm(v3.cross(GC.fwd,GC.up)); GC.stage='ok'; GC.buf=[]; GC.prev=null; gSaveCal();
+             log('G: 校正完了', 'ok'); }
+      updateGBtn();
+    }
+    return;
+  }
+  // ③ 校正済み → 前後/左右Gを算出（±0.2s のEMAで平滑）
+  if (GC.stage!=='ok' || a.x==null) return;
+  const A=[a.x,a.y,a.z];
+  const along=v3.dot(A,GC.fwd), lat=v3.dot(A,GC.right);
+  const w=Math.min(1,(e_interval||60)/200);
+  gx=isNaN(gx)?along/G0:gx+((along/G0)-gx)*w;
+  gy=isNaN(gy)?lat/G0:gy+((lat/G0)-gy)*w;
+  D.gx=gx; D.gy=gy;
+  // 健全性: IMUの前後加速度と OBD車速の d(vsp)/dt を比べる（残差 ≒ g·sin勾配）
+  const vsp=D.vsp;
+  if (vsp!=null && !isNaN(vsp)) {
+    if (!isNaN(gVspPrev) && now-gVspPrevT > 1000) {
+      const dvdt=((vsp-gVspPrev)/3.6)/((now-gVspPrevT)/1000);
+      gDvdtEma=isNaN(gDvdtEma)?dvdt:gDvdtEma+(dvdt-gDvdtEma)*0.3;
+      gAlongEma=isNaN(gAlongEma)?along:gAlongEma+(along-gAlongEma)*0.3;
+      gResid=gAlongEma-gDvdtEma;
+      gVspPrev=vsp; gVspPrevT=now;
+    } else if (isNaN(gVspPrev)) { gVspPrev=vsp; gVspPrevT=now; }
+  }
 }
 
 // iOS13+ は要許可、Android(対象)は requestPermission 自体が無い＝そのまま許可扱い
@@ -459,11 +592,12 @@ function startImu() {
   if (!imuEnabled) return;
   if (typeof DeviceMotionEvent === 'undefined') { log('IMU: 非対応ブラウザ', 'err'); return; }
   imuBuffer = [];
-  window.addEventListener('devicemotion', onMotion);
+  imuLogging = true; subMotion();
   log('--- IMU START ---', 'ok');
 }
 function stopImu() {
-  window.removeEventListener('devicemotion', onMotion);
+  if (!imuLogging) return;
+  imuLogging = false; unsubMotion();
 }
 
 function imuNum(v, d) { return (v == null || isNaN(v)) ? '' : v.toFixed(d); }
@@ -504,6 +638,7 @@ function toggleImu() {
   if (btn) { btn.style.borderColor = imuEnabled ? '#ffaa00' : '#1a3a5a';
              btn.style.color       = imuEnabled ? '#ffaa00' : '#2a5a7a'; }
   log('IMU記録: ' + (imuEnabled ? 'ON' : 'OFF'), 'ok');
+  updateGBtn();                       // [IMU]OFF なら G校正 のハイライトも消す
   if (imuEnabled) {
     requestMotionPerm().then(st => {
       if (st !== 'granted') log('IMU: センサ許可が下りず', 'err');
@@ -518,6 +653,47 @@ function toggleImu() {
   imuEnabled = localStorage.getItem('imuLog') === '1';
   const btn = document.getElementById('imuBtn');
   if (btn && imuEnabled) { btn.style.borderColor = '#ffaa00'; btn.style.color = '#ffaa00'; }
+})();
+
+function updateGBtn() {
+  // 枠は常に出す（機能の存在と次の操作が分かるように）。校正が済むまではグレーアウト。
+  D.gShow = true;
+  D.gNote = (GC.stage === 'ok') ? null : gCalHint();
+  if (GC.stage !== 'ok') { D.gx = D.gy = null; }
+  // ここで drawFlow は呼ばない。initG が読み込み時に updateGBtn を呼ぶため、
+  // 後方で let 宣言される currentView を参照すると TDZ で ReferenceError になり
+  // 以降の定義(setView 等)が全て実行されなくなる。再描画は gTick が担う。
+  const b = document.getElementById('gcalBtn');
+  if (!b) return;
+  // ハイライトは「校正シーケンス進行中」だけ。完了後・未校正・[IMU]OFF では消す
+  const active = imuEnabled && (GC.stage === 'up' || GC.stage === 'wait' || GC.stage === 'fwd');
+  b.style.borderColor = active ? '#ffaa00' : '#1a3a5a';
+  b.style.color       = active ? '#ffaa00' : '#2a5a7a';
+}
+
+/*
+ * Gボールは 60Hz 級で変化するが drawFlow は 2920 受信時(~2Hz)しか呼ばれないため、
+ * G表示中だけ約12Hzで追加再描画する。drawFlow は SVG を全再構築するので上げ過ぎない。
+ */
+// 校正シーケンスのタイムアウト[ms]。未完了のままハイライトが残らないようにする
+const GCAL_TIMEOUT = { up: 6000, wait: 60000, fwd: 10000 };
+let gDrawT = 0;
+function gTick(ts) {
+  requestAnimationFrame(gTick);
+  // 進行中の校正が時間切れなら中止（センサが1サンプルも来ない場合もここで拾える）
+  const lim = GCAL_TIMEOUT[GC.stage];
+  if (lim && Date.now() - GC.t0 > lim) gAbortCal('タイムアウトで中止');
+  if (currentView !== 'flow') return;
+  if (ts - gDrawT < (GC.stage === 'ok' ? 80 : 400)) return;   // 校正済は約12Hz、それ以外は約2.5Hz
+  gDrawT = ts;
+  drawFlow();
+}
+requestAnimationFrame(gTick);
+
+(function initG() {
+  gLoadCal();
+  if (GC.stage === 'ok') ensureGSub().then(() => updateGBtn());   // 校正済みなら自動で購読
+  updateGBtn();
 })();
 
 // ─── SVGメーター描画ヘルパー ──────────────────────────────
@@ -609,7 +785,8 @@ initCenterMark('centerPwr');
 initCenterMark('centerPsys');
 
 // ─── Vehicle data ─────────────────────────────────────────
-const D = { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1 };
+// D は lib/flow.js が宣言する（drawFlow が参照する現在値）。ここでは初期値を入れるだけ。
+Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1 });
 // off90(bit720) = gen_trq(発電機トルク, 生信号)。2920単独で独立に物理換算する。
 // ENG-GEN同軸ゆえ定常の torque balance 比例部分: eng_trq_Nm ≈ gen_trq_Nm。
 // 走行ログ散布図(eng_trq vs gen_trq)の比例係数 |gen_trq|/eng_trq ≈ 0.535 と
@@ -621,9 +798,6 @@ const GEN_PWR_COEF = GEN_TRQ_NM * (2*Math.PI/60) / 1000;  // ≈3.92e-6  (|gen_t
 let systemVolt = 0;
 const SOC_K = -192;        // %/kWh  SOC内挿係数(2923真値で最適化した短窓係数。net容量係数154でなく)
 let socPrevT = 0;          // 前回2920フレーム時刻(内挿の積分起点)
-// RunMode コード → ラベル
-// off77 の値は【10進】(20=EV/40=SERIES/50,70=DIRECT/60,30,10=TRANS)。※0x14=20 等
-const MODE_LABELS = { 20:'EV', 40:'SERIES', 50:'DIRECT', 70:'DIRECT', 60:'TRANS', 30:'TRANS', 10:'TRANS' };
 let runTimeBase = 0;
 let syncTimeMs  = null;
 
@@ -739,105 +913,16 @@ function setView(v){
   }
 })();
 
-const FNS='http://www.w3.org/2000/svg';
-function fEl(tag,attrs,parent){const e=document.createElementNS(FNS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
-const FX_M='#ff9a44', FX_E='#00e5ff', FX_R='#25e0a0', FX_A='#c9a0ff';  // 機械/電気/回生/補機
-// 縦長 viewBox 380x600。中央スパイン 車輪→MOT→bus→BAT, 左 ENG/GEN, 右 AUX/AC
-const fWX=190,fWY=58, fEX=20,fEY=185, fTX=142,fTY=185, fGX=20,fGY=390, fJX=190,fJY=418, fBX=142,fBY=512, fAX=264,fAY=390, fBW=96,fBH=56;
-function fDefs(svg){
-  const d=fEl('defs',{},svg);
-  for(const [id,c] of [['fah_mech',FX_M],['fah_elec',FX_E],['fah_regen',FX_R],['fah_aux',FX_A]]){
-    const m=fEl('marker',{id,markerWidth:2.6,markerHeight:2.4,refX:2.3,refY:1.2,orient:'auto',markerUnits:'strokeWidth'},d);
-    fEl('path',{d:'M0 0 L2.6 1.2 L0 2.4 Z',fill:c},m);
-  }
-}
-function fArrow(svg,pts,kind,active,kw,lx,ly,col,anchor){
-  const color = col || (kind==='mech'?FX_M:kind==='elec'?FX_E:kind==='aux'?FX_A:FX_R);
-  const mk = {[FX_M]:'fah_mech',[FX_E]:'fah_elec',[FX_R]:'fah_regen',[FX_A]:'fah_aux'}[color]||'fah_elec';
-  const mag = (kw!=null)?Math.abs(kw):0;
-  const w = active ? Math.max(3.6, Math.min(2.4+mag*0.18,15)) : 2.6;
-  const d = pts.map((p,i)=>(i?'L':'M')+p[0]+' '+p[1]).join(' ');
-  fEl('path',{d,fill:'none',stroke:color,'stroke-width':w,'stroke-linecap':'round','stroke-linejoin':'round','marker-end':'url(#'+mk+')',opacity:active?1:0.15},svg);
-  if(kw!=null){const t=fEl('text',{x:lx,y:ly,'text-anchor':anchor||'middle','font-size':28,'font-weight':'bold','font-family':'Courier New',fill:color,opacity:active?1:0.15},svg);t.textContent=kw.toFixed(1);}
-}
-function fNode(svg,x,y,label,sub,on,hot,subcol){
-  const g=fEl('g',{opacity:on?1:0.45},svg);
-  fEl('rect',{x,y,width:fBW,height:fBH,rx:7,fill:'#111a24',stroke:on?'#4a6a80':'#2a3a4a','stroke-width':1.6},g);
-  fEl('text',{x:x+fBW/2,y:y+(hot?24:31),'text-anchor':'middle','font-size':19,'font-weight':'bold','font-family':'Courier New',fill:'#dfefff'},g).textContent=label;
-  fEl('text',{x:x+fBW/2,y:y+46,'text-anchor':'middle','font-size':hot?19:10,'font-family':'Courier New','font-weight':hot?'bold':'normal',fill:hot?(subcol||'#9fe8ff'):'#5a7a90'},g).textContent=sub;
-}
-function fWheel(svg,x,y,on,spd){
-  const g=fEl('g',{opacity:on?1:0.45},svg);
-  fEl('circle',{cx:x,cy:y,r:20,fill:'none',stroke:'#889','stroke-width':3.5},g);
-  fEl('circle',{cx:x,cy:y,r:5,fill:'#889'},g);
-  fEl('text',{x:x-32,y:y+6,'text-anchor':'end','font-size':11,fill:'#889'},g).textContent='車輪';
-  if(spd!=null&&!isNaN(spd)){fEl('text',{x:x+30,y:y+8,'text-anchor':'start','font-size':24,'font-weight':'bold','font-family':'Courier New',fill:'#9fe8ff'},svg).textContent=Math.round(spd)+' km/h';}
-}
-// モード遷移ホールド(ルールA): 遷移コード10/30/60を直前の安定モードで埋める
+
+// モード遷移ホールド(ルールA): 遷移コード10/30/60/70を直前の安定モードで埋める。
+// RUN MODE ゲージのちらつきを抑える用途。フロー図のトポロジ/ラベルは D.rawMode(生モード)側で決める。
 let stableMode = -1;
 function updateStableMode(m){
-  if(m===20||m===40||m===50||m===70) stableMode=m;
-  else if(m===10 && stableMode===20) stableMode=40;                                    // EV→(10)→SER 確定
-  else if(m===30 && (stableMode===40||stableMode===50||stableMode===70)) stableMode=20; // SER/DIR→(30)→EV 確定
-  // 60・その他 は直前ホールド
+  if(m===20||m===40||m===50) stableMode=m;                            // 70は遷移(クラッチ開放準備)なので除く
+  else if(m===10 && stableMode===20) stableMode=40;                   // EV→(10)→SER 確定
+  else if(m===30 && (stableMode===40||stableMode===50)) stableMode=20; // SER/DIR→(30)→EV 確定
+  // 60・70・その他 は直前ホールド
   return stableMode;
-}
-function drawFlow(){
-  const svg=document.getElementById('flowSvg');
-  while(svg.firstChild) svg.removeChild(svg.firstChild);
-  fDefs(svg);
-  const mode=(D.dispMode>=0)?D.dispMode:D.runMode;
-  const modeLabel=(mode>=0&&MODE_LABELS[mode])?MODE_LABELS[mode]:'--';
-  const isDirect=(mode===50||mode===70), isSeries=(mode===40);
-  const peng=D.peng||0, pgen=D.pgen||0, pbat=D.pbat||0, pdrive=D.pdrive||0;
-  const regen = pdrive < -0.1;
-  const on=(v)=>Math.abs(v)>0.1;
-  const genGen = pgen > 0.1;              // GEN発電 (ENG→GEN→bus)
-  const genMot = pgen < -0.1;             // GEN力行 (bus→GEN→ENG): エンブレ廃電 or 始動クランキング
-  const genMag = Math.abs(pgen);
-  // エンブレ廃電: 回生中のGEN力行(genMot)が本質トリガー。SOC>=85 は
-  // 「それ未満では回生中にGEN力行しない」前提の緩いガード=始動クランキング誤爆防止。
-  // (実際の廃電はもっと高SOCから入る様子だが経験則につき閾値は暫定)
-  const dump = regen && genMot && D.soc >= 85;
-  // フロー算出 + AUX(電気バス収支の残差 = 補機/DC-DC/AC)
-  let trcWheel, busTrc;
-  const engWheel = isDirect ? peng : 0;   // ENG機械直結→車輪(直結時)
-  if(regen)        { trcWheel=-pdrive; busTrc=-pdrive; }
-  else if(isDirect){ trcWheel=Math.max(0,pdrive-peng); busTrc=trcWheel; }
-  else             { trcWheel=pdrive; busTrc=pdrive; }
-  const engGen = genGen ? peng : genMag;  // ENG-GEN軸の機械電力
-  const genBus = genMag;                  // GEN-bus 電気
-  // 電気バス収支(into-bus正): MOT(回生+/力行-)+GEN(発電+/力行-)+BAT(放電+/充電-) = AUX(常out)
-  const aux = Math.max(0, (regen?busTrc:-busTrc) + (genGen?genMag:(genMot?-genMag:0)) + pbat);
-  const batBus=-pbat;   // +:充電(bus→BAT) / -:放電(BAT→bus)
-  // 機械(橙): ENG直結→車輪(上→右) / MOT→車輪(縦) / ENG↔GEN軸(発電=ENG→GEN / 力行=GEN→ENG)
-  fArrow(svg,[[fEX+fBW/2,fEY],[fEX+fBW/2,fWY],[fWX-24,fWY]],'mech',on(engWheel),on(engWheel)?engWheel:null,128,140);
-  if(regen) fArrow(svg,[[fTX+fBW/2,fWY+24],[fTX+fBW/2,fTY]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_R,'end'); // 車輪→MOT(回生)
-  else      fArrow(svg,[[fTX+fBW/2,fTY],[fTX+fBW/2,fWY+24]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_M,'end'); // MOT→車輪(駆動)
-  if(genMot) fArrow(svg,[[fEX+fBW/2,fGY],[fEX+fBW/2,fEY+fBH]],'mech',on(engGen),on(engGen)?engGen:null,128,326,dump?FX_R:FX_M); // GEN→ENG(上)
-  else       fArrow(svg,[[fEX+fBW/2,fEY+fBH],[fEX+fBW/2,fGY]],'mech',on(engGen),on(engGen)?engGen:null,128,326);               // ENG→GEN(下)
-  // 電気: GEN↔bus(発電=GEN→bus / 力行=bus→GEN) / bus↔MOT(上) / BAT↔bus(下) / bus→AUX(右)
-  if(genMot) fArrow(svg,[[fJX-9,fJY],[fGX+fBW,fGY+fBH/2]],'elec',on(genBus),on(genBus)?genBus:null,132,378,dump?FX_R:null); // bus→GEN(左)
-  else       fArrow(svg,[[fGX+fBW,fGY+fBH/2],[fJX-9,fJY]],'elec',on(genBus),on(genBus)?genBus:null,132,378);               // GEN→bus(右)
-  if(regen) fArrow(svg,[[fJX,fTY+fBH],[fJX,fJY-9]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,FX_R,'end');
-  else      fArrow(svg,[[fJX,fJY-9],[fJX,fTY+fBH]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,null,'end');
-  if(batBus>=0) fArrow(svg,[[fJX,fJY+9],[fBX+fBW/2,fBY]],'elec',on(batBus),on(batBus)?batBus:null,286,470,regen?FX_R:FX_E,'end');
-  else          fArrow(svg,[[fBX+fBW/2,fBY],[fJX,fJY+9]],'elec',on(batBus),on(batBus)?-batBus:null,286,470,null,'end');
-  fArrow(svg,[[fJX+9,fJY],[fAX,fAY+fBH/2]],'aux',on(aux),on(aux)?aux:null,286,378,null,'end');
-  fEl('circle',{cx:fJX,cy:fJY,r:8,fill:'#0a0e14',stroke:FX_E,'stroke-width':2.5},svg);
-  fEl('circle',{cx:fJX,cy:fJY,r:3,fill:FX_E},svg);
-  // ノード
-  fNode(svg,fEX,fEY,'ENG',(Math.round(D.engRot)||0)+' rpm',on(peng)||genMot,true);
-  fNode(svg,fTX,fTY,'MOT','P_mot',on(pdrive));
-  fNode(svg,fGX,fGY,'GEN','P_gen',on(pgen));
-  if(dump) fEl('text',{x:fEX+fBW/2,y:fEY-8,'text-anchor':'middle','font-size':14,'font-weight':'bold','font-family':'Courier New',fill:'#ff5544'},svg).textContent='廃電';
-  fNode(svg,fBX,fBY,'BAT',isNaN(D.soc)?'SOC --':'SOC '+D.soc.toFixed(0)+'%',true,true);
-  fNode(svg,fAX,fAY,'AUX/AC',on(aux)?aux.toFixed(1)+'kW':'--',on(aux),true,FX_A);
-  fWheel(svg,fWX,fWY,on(trcWheel)||on(engWheel),D.vsp);
-  // MODE (ENG/MOTと同じ高さ=上段右)
-  const mc={EV:FX_E,SERIES:FX_E,DIRECT:FX_M}[modeLabel]||'#cfe';
-  fEl('text',{x:312,y:fEY+8,'text-anchor':'middle','font-size':12,'font-family':'Courier New',fill:'#5a7a90','letter-spacing':2},svg).textContent='MODE';
-  fEl('text',{x:312,y:fEY+38,'text-anchor':'middle','font-size':26,'font-weight':'bold','font-family':'Courier New',fill:mc},svg).textContent=modeLabel;
 }
 
 // ─── ELM327 レスポンスパーサー ────────────────────────────
@@ -939,6 +1024,7 @@ function parse22_2920(hex) {
   D.engRot  = engRpm;
   D.pbat    = pbat;
   D.runMode = mode;
+  D.rawMode = mode;                                   // フロー図のトポロジは生モードで決める
   D.dispMode = updateStableMode(mode);                // モード遷移ホールド(10/30/60を吸収)
   D.peng = 2.09e-6 * engTrq * engRpm;                 // エンジン機械出力 [kW]
   D.pgen = GEN_PWR_COEF * (-genTrq) * engRpm;         // 発電機出力 [kW] (発電=正, 2920単独)
@@ -1455,7 +1541,7 @@ function demoTick() {
   }
 
   dSoc = Math.max(16, Math.min(92, dSoc - pbat * 0.0015));  // SOC は pbat に応じ緩変動
-  D.vsp = dSpd; D.engRot = rpm; D.runMode = mode; D.dispMode = updateStableMode(mode); D.soc = dSoc;
+  D.vsp = dSpd; D.engRot = rpm; D.runMode = mode; D.rawMode = mode; D.dispMode = updateStableMode(mode); D.soc = dSoc;
   D.peng = peng; D.pgen = pgen; D.pdrive = pdrive; D.pbat = pbat;
   D.psys = pdrive + (mode === 50 || mode === 70 ? peng : 0);
   systemVolt = 12.4 + Math.random() * .4;

@@ -5,3 +5,8 @@ logs/
 mockups/
 .DS_Store
 logdata/
+video/sync.json
+video/out/
+logdata.zip
+*.zip
+.attic/

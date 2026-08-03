@@ -111,6 +111,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="lib/flow.js"></script>
 <script>
 // ═══ パース ═══════════════════════════════════════════════
 const s16=(h,i)=>{const v=parseInt(h.substr(i*2,4),16);return v>=0x8000?v-0x10000:v;};
@@ -188,7 +189,7 @@ function obdAt(t){ if(!OBD.length) return null; const i=bsearch(OBD,t), a=OBD[i]
 
 // ═══ 地図構築 ═════════════════════════════════════════════
 function tiles(){ return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {maxZoom:19, attribution:'© OpenStreetMap'}); }
+  {maxZoom:19, attribution:'© OpenStreetMap contributors'}); }
 // TRANS(10/30/60)を「次の安定モード=行先」へ寄せる(無ければ直前の安定モード)。
 // 実データ上、行先で見ればほぼ一意(30→EV, 60→DIR, 10はSER/DIR個別)。各サンプルに modeR を付与。
 function resolveModes(){
@@ -234,11 +235,13 @@ function buildMaps(){
   segMeta=GPS.map(p=>{ const o=obdAt(p.t); return {mode:o?(o.modeR??o.mode):-1, spd:o?o.vsp:0}; });
   if(map1){ map1.remove(); map2.remove(); }
   // 俯瞰(固定)
-  map1=L.map('map1',{zoomControl:false, attributionControl:false, preferCanvas:true}); tiles().addTo(map1);
+  map1=L.map('map1',{zoomControl:false, attributionControl:true, preferCanvas:true}); tiles().addTo(map1);
+  map1.attributionControl.setPrefix('');   // 地図画像を出す以上、帰属表示は必須
   buildTrack(map1); ({cover:futureCover1, bridge:bridgeCover1, cur:cur1}=addMarkers(map1));
   map1.fitBounds(L.latLngBounds(latlngs).pad(0.12));
   // ナビ 追従(ズーム可変)
-  map2=L.map('map2',{attributionControl:false, zoomControl:false, preferCanvas:true}); tiles().addTo(map2);
+  map2=L.map('map2',{attributionControl:true, zoomControl:false, preferCanvas:true}); tiles().addTo(map2);
+  map2.attributionControl.setPrefix('');
   L.control.zoom({position:'topright'}).addTo(map2);   // 左上のナビタグと被らないよう右上へ
   buildTrack(map2); ({cover:futureCover2, bridge:bridgeCover2, cur:cur2}=addMarkers(map2));
   map2.setView(latlngs[0],16);
@@ -253,94 +256,6 @@ function applyFollowZoom(){
 }
 
 // ═══ パワーフロー (index/viewer から移植) ═════════════════
-const D = {};   // drawFlow が参照する現在値
-const MODE_LABELS = { 20:'EV', 40:'SERIES', 50:'DIRECT', 70:'DIRECT', 60:'TRANS', 30:'TRANS', 10:'TRANS' };
-const MODE_COLOR  = { EV:'#00e5ff', SERIES:'#4a9eff', DIRECT:'#ff9a44', TRANS:'#8aa0b4' };
-function modeColorOf(mode){ return MODE_COLOR[MODE_LABELS[mode]] || '#8aa0b4'; }
-function spdWidth(v){ v=Math.max(0,Math.min(110,v||0)); return Math.round(2 + v/110*10); }  // 車速→線幅 2..12(俯瞰でも差が出るよう広め)
-const FNS='http://www.w3.org/2000/svg';
-function fEl(tag,attrs,parent){const e=document.createElementNS(FNS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
-const FX_M='#ff9a44', FX_E='#00e5ff', FX_R='#25e0a0', FX_A='#c9a0ff';
-const fWX=190,fWY=58, fEX=20,fEY=185, fTX=142,fTY=185, fGX=20,fGY=390, fJX=190,fJY=418, fBX=142,fBY=512, fAX=264,fAY=390, fBW=96,fBH=56;
-function fDefs(svg){
-  const d=fEl('defs',{},svg);
-  for(const [id,c] of [['fah_mech',FX_M],['fah_elec',FX_E],['fah_regen',FX_R],['fah_aux',FX_A]]){
-    const m=fEl('marker',{id,markerWidth:2.6,markerHeight:2.4,refX:2.3,refY:1.2,orient:'auto',markerUnits:'strokeWidth'},d);
-    fEl('path',{d:'M0 0 L2.6 1.2 L0 2.4 Z',fill:c},m);
-  }
-}
-function fArrow(svg,pts,kind,active,kw,lx,ly,col,anchor){
-  const color = col || (kind==='mech'?FX_M:kind==='elec'?FX_E:kind==='aux'?FX_A:FX_R);
-  const mk = {[FX_M]:'fah_mech',[FX_E]:'fah_elec',[FX_R]:'fah_regen',[FX_A]:'fah_aux'}[color]||'fah_elec';
-  const mag = (kw!=null)?Math.abs(kw):0;
-  const w = active ? Math.max(3.6, Math.min(2.4+mag*0.18,15)) : 2.6;
-  const d = pts.map((p,i)=>(i?'L':'M')+p[0]+' '+p[1]).join(' ');
-  fEl('path',{d,fill:'none',stroke:color,'stroke-width':w,'stroke-linecap':'round','stroke-linejoin':'round','marker-end':'url(#'+mk+')',opacity:active?1:0.15},svg);
-  if(kw!=null){const t=fEl('text',{x:lx,y:ly,'text-anchor':anchor||'middle','font-size':28,'font-weight':'bold','font-family':'Courier New',fill:color,opacity:active?1:0.15},svg);t.textContent=kw.toFixed(1);}
-}
-function fNode(svg,x,y,label,sub,on,hot,subcol){
-  const g=fEl('g',{opacity:on?1:0.45},svg);
-  fEl('rect',{x,y,width:fBW,height:fBH,rx:7,fill:'#111a24',stroke:on?'#4a6a80':'#2a3a4a','stroke-width':1.6},g);
-  fEl('text',{x:x+fBW/2,y:y+(hot?24:31),'text-anchor':'middle','font-size':19,'font-weight':'bold','font-family':'Courier New',fill:'#dfefff'},g).textContent=label;
-  fEl('text',{x:x+fBW/2,y:y+46,'text-anchor':'middle','font-size':hot?19:10,'font-family':'Courier New','font-weight':hot?'bold':'normal',fill:hot?(subcol||'#9fe8ff'):'#5a7a90'},g).textContent=sub;
-}
-function fWheel(svg,x,y,on,spd){
-  const g=fEl('g',{opacity:on?1:0.45},svg);
-  fEl('circle',{cx:x,cy:y,r:20,fill:'none',stroke:'#889','stroke-width':3.5},g);
-  fEl('circle',{cx:x,cy:y,r:5,fill:'#889'},g);
-  fEl('text',{x:x-32,y:y+6,'text-anchor':'end','font-size':11,fill:'#889'},g).textContent='車輪';
-  if(spd!=null&&!isNaN(spd)){fEl('text',{x:x+30,y:y+8,'text-anchor':'start','font-size':24,'font-weight':'bold','font-family':'Courier New',fill:'#9fe8ff'},svg).textContent=Math.round(spd)+' km/h';}
-}
-function drawFlow(){
-  const svg=document.getElementById('flowSvg');
-  while(svg.firstChild) svg.removeChild(svg.firstChild);
-  fDefs(svg);
-  const mode=(D.dispMode>=0)?D.dispMode:D.runMode;
-  const modeLabel=(mode>=0&&MODE_LABELS[mode])?MODE_LABELS[mode]:'--';
-  const isDirect=(mode===50||mode===70), isSeries=(mode===40);
-  const peng=D.peng||0, pgen=D.pgen||0, pbat=D.pbat||0, pdrive=D.pdrive||0;
-  const regen = pdrive < -0.1;
-  const on=(v)=>Math.abs(v)>0.1;
-  const genGen = pgen > 0.1;
-  const genMot = pgen < -0.1;
-  const genMag = Math.abs(pgen);
-  const dump = regen && genMot && D.soc >= 85;
-  let trcWheel, busTrc;
-  const engWheel = isDirect ? peng : 0;
-  if(regen)        { trcWheel=-pdrive; busTrc=-pdrive; }
-  else if(isDirect){ trcWheel=Math.max(0,pdrive-peng); busTrc=trcWheel; }
-  else             { trcWheel=pdrive; busTrc=pdrive; }
-  const engGen = genGen ? peng : genMag;
-  const genBus = genMag;
-  const aux = Math.max(0, (regen?busTrc:-busTrc) + (genGen?genMag:(genMot?-genMag:0)) + pbat);
-  const batBus=-pbat;
-  fArrow(svg,[[fEX+fBW/2,fEY],[fEX+fBW/2,fWY],[fWX-24,fWY]],'mech',on(engWheel),on(engWheel)?engWheel:null,128,140);
-  if(regen) fArrow(svg,[[fTX+fBW/2,fWY+24],[fTX+fBW/2,fTY]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_R,'end');
-  else      fArrow(svg,[[fTX+fBW/2,fTY],[fTX+fBW/2,fWY+24]],'mech',on(trcWheel),on(trcWheel)?trcWheel:null,286,140,FX_M,'end');
-  if(genMot) fArrow(svg,[[fEX+fBW/2,fGY],[fEX+fBW/2,fEY+fBH]],'mech',on(engGen),on(engGen)?engGen:null,128,326,dump?FX_R:FX_M);
-  else       fArrow(svg,[[fEX+fBW/2,fEY+fBH],[fEX+fBW/2,fGY]],'mech',on(engGen),on(engGen)?engGen:null,128,326);
-  if(genMot) fArrow(svg,[[fJX-9,fJY],[fGX+fBW,fGY+fBH/2]],'elec',on(genBus),on(genBus)?genBus:null,132,378,dump?FX_R:null);
-  else       fArrow(svg,[[fGX+fBW,fGY+fBH/2],[fJX-9,fJY]],'elec',on(genBus),on(genBus)?genBus:null,132,378);
-  if(regen) fArrow(svg,[[fJX,fTY+fBH],[fJX,fJY-9]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,FX_R,'end');
-  else      fArrow(svg,[[fJX,fJY-9],[fJX,fTY+fBH]],'elec',on(busTrc),on(busTrc)?busTrc:null,286,326,null,'end');
-  if(batBus>=0) fArrow(svg,[[fJX,fJY+9],[fBX+fBW/2,fBY]],'elec',on(batBus),on(batBus)?batBus:null,286,470,regen?FX_R:FX_E,'end');
-  else          fArrow(svg,[[fBX+fBW/2,fBY],[fJX,fJY+9]],'elec',on(batBus),on(batBus)?-batBus:null,286,470,null,'end');
-  fArrow(svg,[[fJX+9,fJY],[fAX,fAY+fBH/2]],'aux',on(aux),on(aux)?aux:null,286,378,null,'end');
-  fEl('circle',{cx:fJX,cy:fJY,r:8,fill:'#0a0e14',stroke:FX_E,'stroke-width':2.5},svg);
-  fEl('circle',{cx:fJX,cy:fJY,r:3,fill:FX_E},svg);
-  fNode(svg,fEX,fEY,'ENG',(Math.round(D.engRot)||0)+' rpm',on(peng)||genMot,true);
-  fNode(svg,fTX,fTY,'MOT','P_mot',on(pdrive));
-  fNode(svg,fGX,fGY,'GEN','P_gen',on(pgen));
-  if(dump) fEl('text',{x:fEX+fBW/2,y:fEY-8,'text-anchor':'middle','font-size':14,'font-weight':'bold','font-family':'Courier New',fill:'#ff5544'},svg).textContent='廃電';
-  fNode(svg,fBX,fBY,'BAT',isNaN(D.soc)?'SOC --':'SOC '+D.soc.toFixed(0)+'%',true,true);
-  fNode(svg,fAX,fAY,'AUX/AC',on(aux)?aux.toFixed(1)+'kW':'--',on(aux),true,FX_A);
-  fWheel(svg,fWX,fWY,on(trcWheel)||on(engWheel),D.vsp);
-  const mc={EV:FX_E,SERIES:FX_E,DIRECT:FX_M}[modeLabel]||'#cfe';
-  fEl('text',{x:312,y:fEY+8,'text-anchor':'middle','font-size':12,'font-family':'Courier New',fill:'#5a7a90','letter-spacing':2},svg).textContent='MODE';
-  fEl('text',{x:312,y:fEY+38,'text-anchor':'middle','font-size':26,'font-weight':'bold','font-family':'Courier New',fill:mc},svg).textContent=modeLabel;
-}
-
-// ═══ 描画 ═════════════════════════════════════════════════
 function fmtT(ms){ const s=Math.max(0,(ms-T0)/1000); const m=Math.floor(s/60); return (''+m).padStart(2,'0')+':'+(''+Math.floor(s%60)).padStart(2,'0'); }
 // 絶対時刻: ブラウザのローカルTZで 日付+時刻 を表示＋TZ略称(JST等)併記
 let TZ='';
@@ -361,6 +276,7 @@ function render(t){
   const o=obdAt(t);
   if(o){
     const mR=o.modeR??o.mode;
+    D.rawMode=o.mode;   // トポロジとラベルは生モードで決める(遷移中はTRANS表示)
     D.runMode=mR; D.dispMode=mR; D.peng=o.peng; D.pgen=o.pgen; D.pbat=o.pbat;
     D.pdrive=o.pdrive; D.engRot=o.rpm; D.vsp=o.vsp; D.soc=(o.soc==null?NaN:o.soc);
     drawFlow();

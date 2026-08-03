@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FL4 走行動画 × テレメトリ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:#05080c; color:#cfe; font:12px/1.4 system-ui,sans-serif; overflow:hidden; }
+  /* ── ローダ ── */
+  #loader { display:flex; flex-direction:column; gap:12px; align-items:center; justify-content:center; height:100%; padding:20px; overflow:auto; }
+  #loader h1 { font-size:16px; color:#4a9eff; margin:0; }
+  .drop { border:1px dashed #2a5a8c; border-radius:8px; padding:14px 20px; background:#0d1520; min-width:340px; }
+  .drop label { display:block; margin:8px 0 2px; color:#8ab; }
+  .drop input { width:100%; color:#cfe; }
+  .drop .hint { color:#68a; font-size:10px; margin-top:2px; }
+  button { padding:9px 16px; background:#0d1e30; border:1px solid #2a5a8c; color:#cfe; border-radius:6px; cursor:pointer; }
+  button:hover { background:#122840; border-color:#4a9eff; }
+  button:disabled { opacity:.4; cursor:default; }
+  #msg { color:#c85; min-height:16px; white-space:pre-wrap; max-width:760px; font-size:11px; }
+  /* ── アプリ ── */
+  #app { display:none; flex-direction:column; height:100%; }
+  #app.on { display:flex; }
+  #stageWrap { flex:1; position:relative; overflow:hidden; }
+  /* 出力と同一の 1920x1080。ここに映るものがそのまま書き出し対象になる */
+  #stage { position:absolute; top:0; left:0; width:1920px; height:1080px; transform-origin:top left; background:#000; }
+  #stage > div { position:absolute; overflow:hidden; background:#0a1520; }
+  /* 480×270 格子。前方は 0.75倍(960×540)、フローは縦に2段ぶん(480×810) */
+  #vcell   { left:0;     top:0;   width:960px;  height:540px; background:#000; }
+  #flowcell{ left:960px;  top:0;   width:480px;  height:810px; }
+  #numcell { left:1440px; top:0;   width:480px;  height:540px; }
+  #rearcell{ left:0;     top:540px; width:480px; height:270px; background:#000; }
+  #navcell { left:480px;  top:540px; width:480px; height:270px; }
+  #ovcell  { left:1440px; top:540px; width:480px; height:270px; }
+  #graphcell{ left:0;    top:810px; width:1920px; height:270px; }
+  #graphcell svg { width:100%; height:100%; display:block; }
+  /* 数値パネル: フロー図に出ていない値だけを大きく出す */
+  #numcell .nlist { display:flex; flex-direction:column; height:100%; padding:10px 12px; gap:6px; }
+  #numcell .nrow { display:flex; align-items:baseline; justify-content:space-between; border-bottom:1px solid #16242e; padding-bottom:4px; }
+  #numcell .nk { color:#6f8ba0; font-size:15px; }
+  #numcell .nv { color:#cfe; font-size:30px; font-weight:bold; font-variant-numeric:tabular-nums; letter-spacing:-0.5px; }
+  #numcell .nu { color:#6f8ba0; font-size:14px; margin-left:4px; }
+  #vcell video, #rearcell video { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
+  #vcell video.off, #rearcell video.off { visibility:hidden; }
+  #flowcell svg { width:100%; height:100%; display:block; }
+  .lmap { position:absolute; inset:0; }
+  .tag { position:absolute; top:6px; left:8px; z-index:500; background:#000a; padding:2px 8px; border-radius:3px; color:#7ac; font-size:14px; pointer-events:none; }
+  .hud { position:absolute; bottom:6px; left:8px; z-index:500; background:#000b; padding:4px 9px; border-radius:4px; font-size:15px; pointer-events:none; white-space:pre; font-variant-numeric:tabular-nums; }
+  /* ── コントロール(ステージ外＝出力に映らない) ── */
+  #ctrl { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:6px 10px; background:#0d1218; border-top:1px solid #1c2836; }
+  #seek { flex:1 1 320px; }
+  .spd { padding:3px 8px; background:#0d1520; border:1px solid #1a3a5a; color:#5a8; border-radius:4px; cursor:pointer; font-size:11px; user-select:none; }
+  .spd.on { border-color:#ffaa00; color:#ffaa00; }
+  #tlabel { margin-left:auto; color:#8ab; font-variant-numeric:tabular-nums; }
+  #warn { color:#c85; font-size:10px; flex:1 1 100%; white-space:pre-wrap; }
+  .leaflet-container { background:#0d1218; }
+  /* 地図の帰属表示。地図画像を含む成果物を出す以上、再生でも書き出しでも必ず出す */
+  .attrib { position:absolute; right:6px; bottom:5px; z-index:500; background:#0009; padding:1px 5px;
+            border-radius:3px; color:#9ab; font-size:11px; pointer-events:none; white-space:nowrap; }
+  /* ── 書き出しパネル ── */
+  #expPanel { display:none; position:fixed; inset:0; background:#000c; z-index:2000; align-items:center; justify-content:center; }
+  #expPanel.on { display:flex; }
+  #expCard { background:#0d1420; border:1px solid #2a4a66; border-radius:12px; padding:16px 18px; width:min(94vw,520px); max-height:92vh; overflow:auto; }
+  #expCard label { display:block; margin:8px 0 2px; color:#8ab; font-size:11px; }
+  #expCard input[type=text], #expCard select { width:100%; background:#0a1018; border:1px solid #1c2c3c; color:#cfe; border-radius:5px; padding:5px 7px; }
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <h1>FL4 走行動画 × テレメトリ</h1>
+  <div class="drop">
+    <label>OBD フレームログ (.txt)</label>
+    <input type="file" id="fTxt" accept=".txt">
+    <label>GPX（省略可。無ければドラレコの NMEA を使う）</label>
+    <input type="file" id="fGpx" accept=".gpx">
+    <label>ドラレコ（SDカードのフォルダ）</label>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+      <button id="pickDir">フォルダを選択</button>
+      <span id="dirName" style="color:#8ab"></span>
+    </div>
+    <div class="hint">フォルダ選択が使えない環境（Android 等）は下から MP4 と NMEA を複数選択</div>
+    <input type="file" id="fFiles" multiple accept=".mp4,.MP4,.nmea,.NMEA">
+  </div>
+  <button id="goBtn">読み込み</button>
+  <div id="msg"></div>
+</div>
+
+<div id="app">
+  <div id="stageWrap"><div id="stage">
+    <div id="vcell"><video id="vA" muted playsinline preload="auto"></video><video id="vB" class="off" muted playsinline preload="auto"></video></div>
+    <div id="flowcell"><svg id="flowSvg" viewBox="0 0 380 600" preserveAspectRatio="xMidYMid meet"></svg></div>
+    <div id="rearcell"><video id="vRA" muted playsinline preload="auto"></video><video id="vRB" class="off" muted playsinline preload="auto"></video><div class="tag">リア</div></div>
+    <div id="navcell"><div class="lmap" id="mapNav"></div><div class="tag">ナビ</div><div class="hud" id="hudNav"></div><div class="attrib" id="atNav"></div></div>
+    <div id="ovcell"><div class="lmap" id="mapOv"></div><div class="tag">俯瞰</div><div class="hud" id="hudOv"></div><div class="attrib" id="atOv"></div></div>
+    <div id="numcell"><div class="nlist" id="numList"></div></div>
+    <div id="graphcell"><svg id="graphSvg" viewBox="0 0 1920 270" preserveAspectRatio="none"></svg></div>
+  </div></div>
+  <div id="ctrl">
+    <button id="playBtn" style="width:40px">▶</button>
+    <span class="spd" id="back5">« 5s</span>
+    <span class="spd" id="fwd10">10s »</span>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span class="spd on" data-s="1">1x</span>
+    <span class="spd" data-s="2">2x</span>
+    <span class="spd" data-s="4">4x</span>
+    <span class="spd on" id="rearBtn">リア</span>
+    <select id="tileStyle" class="spd" style="color:#5a8"></select>
+    <span class="spd" id="expBtn">⤓ 書き出し</span>
+    <span class="spd" id="dlSync">⤓ sync.json</span>
+    <span id="tlabel">--:-- / --:--</span>
+    <div id="warn"></div>
+  </div>
+  <div id="expPanel">
+    <div id="expCard">
+      <h3 style="margin:0 0 8px; color:#4a9eff; font-size:14px">オーバーレイ書き出し</h3>
+      <div style="color:#8ab; margin-bottom:8px; font-size:11px">テレメトリを JPEG 連番で書き出す。映像との合成はローカルの ffmpeg 1コマンドで行う。</div>
+      <label>オーバーレイ fps</label>
+      <select id="expFps"><option value="10" selected>10 (推奨)</option><option value="5">5 (容量半分)</option><option value="15">15</option></select>
+      <label>JPEG 品質 <span id="expQv">82</span></label>
+      <input type="range" id="expQ" min="60" max="95" value="82" style="width:100%">
+      <label>ドラレコ SD の絶対パス（concat リスト生成用）</label>
+      <input type="text" id="expRoot" placeholder="例) macOS: /Volumes/NO NAME  /  Windows: E:\">
+      <label>出力先フォルダ</label>
+      <div style="display:flex; gap:8px; align-items:center; margin:4px 0 8px">
+        <button id="expPick">フォルダを選択</button><span id="expDir" style="color:#8ab"></span>
+      </div>
+      <div id="expStat" style="color:#5a8; min-height:40px; white-space:pre-wrap; font-variant-numeric:tabular-nums; font-size:11px"></div>
+      <div style="display:flex; gap:8px; margin-top:6px">
+        <button id="expGo">開始</button><button id="expStop">中止</button><button id="expClose">閉じる</button>
+      </div>
+    </div>
+  </div>
+  <!-- 書き出し用。SVG 本体には style を付けない（クローンに position:absolute が残ると
+       単体画像として描画したとき root ごと画面外に飛び、完全に空白になる） -->
+  <div style="position:absolute; left:-9999px; top:0; width:1920px; height:1080px">
+    <svg id="expFlow" viewBox="0 0 380 600" width="480" height="810"></svg>
+    <svg id="expGraph" viewBox="0 0 1920 270" width="1920" height="270"></svg>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="lib/flow.js"></script>
+<script type="module">
+import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, haversineMeters } from './video/sync.js';
+import { drawGraph } from './lib/graph.js';
+import { TileCache, makeView, fitView, zoomForSpan, drawTiles, drawRoute, drawDot, visibleRange, TILE_STYLES, drawAttribution } from './video/tilemap.js';
+
+const $ = (id) => document.getElementById(id);
+const msg = (s) => { $('msg').textContent = s; };
+const FOLLOW_SPAN_M = 700;      // ナビが映す実距離(m)
+const PRELOAD_SEC = 4;          // 次クリップの先読み開始（残り秒）
+
+let MAN = null, TL = null, OBD = [], TRACK = [], CLIPS = new Map();   // name → {file, S0, duration}
+let clipOrder = [], winS0 = 0, winS1 = 0, S = 0, playing = false, rate = 1;
+let mapNav, mapOv, curNav, curOv, navPos = null, TMETA = [], GSNS = [], ECON = [];
+let lastFlowKey = null, lastGraphUtc = -1e9, perf = { n: 0, sum: 0, t: 0 };   // 描画スロットリングと計測
+let rearOn = true;   // リア映像の有効/無効（720p を2本同時にデコードするコストの切り分け用にも使う）
+let act = 0;                                                          // 0=vA, 1=vB
+const V = [], VR = [];   // 前方 / リア（各2枚のダブルバッファ）
+let pending = { idx: -1, ready: false };
+
+// ─────────────────────────────── ファイル収集
+async function collectFromDirectory(handle) {
+  const out = [];
+  const walk = async (dir, prefix) => {
+    for await (const [name, h] of dir.entries()) {
+      if (name.startsWith('.')) continue;
+      if (h.kind === 'directory') await walk(h, prefix + name + '/');
+      else out.push({ name, path: prefix + name, getFile: () => h.getFile() });
+    }
+  };
+  await walk(handle, '');
+  return out;
+}
+function collectFromInput(files) {
+  return [...files].map((f) => ({ name: f.name, path: f.webkitRelativePath || f.name, getFile: async () => f }));
+}
+
+// ─────────────────────────────── 読み込み → 同期
+async function load(entries, txtFile, gpxFile) {
+  const T0 = performance.now(); const lap = [];
+  const mark = (name) => { lap.push(`${name} ${((performance.now() - T0) / 1000).toFixed(1)}s`); };
+  const ext = (p) => (p.split('.').pop() || '').toLowerCase();
+  const mp4 = entries.filter((e) => ext(e.path) === 'mp4');
+  const nme = entries.filter((e) => ext(e.path) === 'nmea');
+  if (!mp4.length) throw new Error('MP4 が見つからない');
+  if (!nme.length) throw new Error('NMEA が見つからない（時刻同期に必要）');
+  msg(`NMEA を解析中… (${nme.length})`);
+
+  const base = (p) => p.split('/').pop().replace(/\.[^.]+$/, '');
+  const nmeaByBase = new Map();
+  for (const e of nme) nmeaByBase.set(base(e.path), e);
+
+  // 同名 MP4 が複数ある機種（前方/後方カメラ）: パス階層が浅い方を前方、次をリア扱いにする
+  const cands = new Map();
+  for (const e of mp4) {
+    const b = base(e.path);
+    if (!nmeaByBase.has(b)) continue;
+    if (!cands.has(b)) cands.set(b, []);
+    cands.get(b).push({ entry: e, depth: e.path.split('/').length });
+  }
+  const byBase = new Map();
+  for (const [b, list] of cands) {
+    list.sort((x, y) => x.depth - y.depth);
+    byBase.set(b, { entry: list[0].entry, depth: list[0].depth, rearEntry: list[1] ? list[1].entry : null });
+  }
+  if (!byBase.size) throw new Error('MP4 と同名の NMEA が対応付かない');
+
+  // OBD ログを先に読み、時間で候補を絞る（SD 全体を読まないため）
+  msg('OBD ログを解析中…');
+  const obd = parseObdLog(await txtFile.text());
+  if (!obd.samples.length) throw new Error('OBD ログに 2920 応答が無い');
+  mark('OBDログ');
+  const t0 = obd.samples[0].t - 900, t1 = obd.samples[obd.samples.length - 1].t + 900;
+
+  /*
+   * 2パス構成。SD 全体には数日分のクリップが入っているので、全 NMEA を全文解析すると
+   * 数十MBの I/O と解析が無駄になる（実測 215本/28MB に対し必要なのは29本）。
+   * 1st: NMEA の先頭 4KB だけ読んで開始時刻を得て候補を絞る（ファイル名の書式に依存しない）。
+   * 2nd: 生き残りだけ全文解析 + MP4 メタ読み。I/O はバッチ並列化する。
+   */
+  const BATCH = 8;
+  const keys = [...byBase.keys()];
+  const starts = new Map();
+  for (let i = 0; i < keys.length; i += BATCH) {
+    await Promise.all(keys.slice(i, i + BATCH).map(async (b) => {
+      try {
+        const f = await nmeaByBase.get(b).getFile();
+        const r = parseNmea(await f.slice(0, 4096).text());   // 先頭だけ。末尾の欠けた行は無視される
+        if (r.fixes.length) starts.set(b, r.fixes[0].t);
+      } catch (e) { /* 読めなければ「不明」として候補に残す */ }
+    }));
+    if (i % 64 === 0) msg(`クリップを絞り込み中… ${Math.min(i + BATCH, keys.length)}/${keys.length}`);
+  }
+  /*
+   * クリップ長の余裕(600s)を見て前方に広く取る。この後の全文解析で厳密に絞り直す。
+   * 開始時刻が取れなかったものは「不明」として必ず候補に残す（落としてはいけない）。
+   * 録画開始直後は GPS 未測位（$GPRMC の status=V）で先頭に有効 fix が無い場合があり、
+   * 実測でも 188本中10本が該当した。
+   */
+  const unknown = keys.filter((b) => !starts.has(b));
+  const cand = keys.filter((b) => {
+    const t = starts.get(b);
+    return t == null || (t >= t0 - 1500 && t <= t1 + 900);
+  });
+  mark(`絞り込み(${cand.length}/${keys.length}本, 開始時刻不明${unknown.length}本を含む)`);
+  if (!cand.length) throw new Error('OBD ログの時間帯に一致するクリップが無い');
+
+  const clips = [];
+  for (let i = 0; i < cand.length; i += BATCH) {
+    msg(`クリップを解析中… ${Math.min(i + BATCH, cand.length)}/${cand.length}`);
+    const got = await Promise.all(cand.slice(i, i + BATCH).map(async (b) => {
+      const { entry, depth, rearEntry } = byBase.get(b);
+      const { fixes, gsens, signatures } = parseNmea(await (await nmeaByBase.get(b).getFile()).text());
+      if (!fixes.length) return null;
+      if (fixes[fixes.length - 1].t < t0 || fixes[0].t > t1) return null;   // ここで厳密に絞る
+      const file = await entry.getFile();
+      const rearFile = rearEntry ? await rearEntry.getFile() : null;
+      let meta;
+      try {
+        meta = await parseMp4Meta(async (off, len) => await file.slice(off, off + len).arrayBuffer(), file.size);
+      } catch (e) { console.warn(b, e.message); return null; }
+      return { name: b, channelRank: depth, creationTime: meta.creationTime, duration: meta.duration,
+               nmeaFirst: fixes[0].t, nmeaLast: fixes[fixes.length - 1].t, fixes, gsens, signatures, file, rearFile,
+               path: entry.path, rearPath: rearEntry ? rearEntry.path : null };
+    }));
+    for (const c of got) if (c) clips.push(c);
+  }
+  if (!clips.length) throw new Error('OBD ログの時間帯に一致するクリップが無い');
+
+  mark(`全文解析(${clips.length}本採用)`);
+  msg('GPX を解析中…');
+  const gpx = gpxFile ? parseGpx(await gpxFile.text()) : null;
+  mark('GPX');
+
+  msg('時刻同期を計算中…');
+  MAN = buildManifest({ clips, obd, gpx });
+  TL = makeTimeline(MAN);
+  mark('同期計算');
+  deriveTelemetry(obd);
+  OBD = obd.samples;
+  mark('派生量');
+
+  for (const c of MAN.session.clips) {
+    const src = clips.find((x) => x.name === c.name);
+    if (src) CLIPS.set(c.name, { file: src.file, rearFile: src.rearFile, path: src.path, rearPath: src.rearPath,
+                                 S0: c.S0, duration: c.duration, url: null, rearUrl: null });
+  }
+  clipOrder = MAN.session.clips.filter((c) => CLIPS.has(c.name)).map((c) => c.name);
+
+  // マップ用トラック: GPX が使えるならそちら、無ければ NMEA
+  const dGpx = MAN.offsets.gpx.ok ? MAN.offsets.gpx.delta : 0;
+  TRACK = MAN.data.mapSource === 'gpx' && gpx
+    ? gpx.map((p) => ({ t: p.t + dGpx, lat: p.lat, lon: p.lon, ele: p.ele }))
+    : clips.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t).map((p) => ({ t: p.t, lat: p.lat, lon: p.lon, ele: p.ele }));
+
+  // 前後左右G: ドラレコ内蔵IMU($GSENS 10Hz)。ドラレコ自身のNMEA由来なので既に映像と同一時間軸。
+  // 単位は g（GPS由来の縦/横加速度と突合して確認: X=前後 r0.925 / Y=左右 r0.806、係数とも 1g=9.81 近傍）。
+  const sessNames = new Set(MAN.session.clips.map((c) => c.name));
+  const graw = clips.filter((c) => sessNames.has(c.name)).flatMap((c) => c.gsens || []).sort((a, b) => a.t - b.t);
+  GSNS = graw.map((g, i) => {                     // ±2サンプル(±0.2s)平滑で表示のちらつきを抑える
+    let sx = 0, sy = 0, n = 0;
+    for (let j = Math.max(0, i - 2); j <= Math.min(graw.length - 1, i + 2); j++) { sx += graw[j].acc[0]; sy += graw[j].acc[1]; n++; }
+    return { t: g.t, gx: sx / n, gy: sy / n };
+  });
+
+  /*
+   * 電費: 消費 E[Wh] = Σ(Peng+Pbat)·dt、距離 D[km] = Σ vsp·dt（replay のサマリーと同じ定義）。
+   * 瞬間値は P/v なので停車付近で発散する（実測で |値|>1000Wh/km が2.5%）。
+   * 距離窓（直近500m）にすると分母が固定され安定する（実測 中央97・最大433Wh/km）ので
+   * 表示は「累積」と「直近500m」の2本立てにする。
+   */
+  {
+    let E = 0, D = 0;
+    ECON = obd.samples.map((s2, i) => {
+      if (i > 0) {
+        const dt = (s2.t - obd.samples[i - 1].t) / 3600;          // h
+        if (dt > 0 && dt < 0.02) { E += (s2.peng + s2.pbat) * dt * 1000; D += s2.vsp * dt; }
+      }
+      return { t: s2.t, E, D, w500: NaN };
+    });
+    for (let i = 0, j = 0; i < ECON.length; i++) {                 // 直近500m の区間電費
+      while (j < i && ECON[i].D - ECON[j].D > 0.5) j++;
+      const dd = ECON[i].D - ECON[j].D;
+      if (dd >= 0.4) ECON[i].w500 = (ECON[i].E - ECON[j].E) / dd;
+    }
+  }
+
+  buildGraphSeries(MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0);
+  mark('グラフ系列');
+
+  winS0 = TL.utcToS(MAN.window.startUtc);
+  winS1 = TL.utcToS(MAN.window.endUtc);
+  if (!(winS1 > winS0)) throw new Error('映像・NMEA・OBD の共通区間が無い');
+  mark(`G系列(${GSNS.length}点)`);
+  MAN.timing = lap;
+  return MAN;
+}
+
+// ─────────────────────────────── マップ
+const TILE_KEY = 'fl4obd.video.tilestyle';
+let tileStyle = localStorage.getItem(TILE_KEY) || 'darknl';
+if (!TILE_STYLES[tileStyle]) tileStyle = 'darknl';
+let tileLayers = [];
+function tiles() {
+  const l = L.tileLayer(TILE_STYLES[tileStyle].url, { maxZoom: 19, attribution: '' });
+  tileLayers.push(l);
+  return l;
+}
+function applyTileStyle() {
+  const st = TILE_STYLES[tileStyle];
+  for (const l of tileLayers) l.setUrl(st.url);
+  for (const id of ['atNav', 'atOv']) { const e = $(id); if (e) e.textContent = st.attrib; }
+}
+function obdAt(utc) {
+  if (!OBD.length) return null;
+  let lo = 0, hi = OBD.length - 1, r = 0;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (OBD[m].t <= utc) { r = m; lo = m + 1; } else hi = m - 1; }
+  const a = OBD[r], b = OBD[Math.min(r + 1, OBD.length - 1)];
+  return Math.abs(a.t - utc) <= Math.abs(b.t - utc) ? a : b;
+}
+function gAt(utc) {
+  if (!GSNS.length) return null;
+  if (utc < GSNS[0].t || utc > GSNS[GSNS.length - 1].t) return null;
+  let lo = 0, hi = GSNS.length - 1, r = 0;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (GSNS[m].t <= utc) { r = m; lo = m + 1; } else hi = m - 1; }
+  const a = GSNS[r], b = GSNS[Math.min(r + 1, GSNS.length - 1)];
+  if (b.t - a.t > 1) return a;
+  const f = b.t > a.t ? (utc - a.t) / (b.t - a.t) : 0;
+  return { gx: a.gx + (b.gx - a.gx) * f, gy: a.gy + (b.gy - a.gy) * f };
+}
+function econAt(utc) {
+  if (!ECON.length) return null;
+  let lo = 0, hi = ECON.length - 1, r = 0;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (ECON[m].t <= utc) { r = m; lo = m + 1; } else hi = m - 1; }
+  return ECON[r];
+}
+function trackAt(utc) {
+  if (!TRACK.length) return null;
+  if (utc <= TRACK[0].t) return { ...TRACK[0], i: 0 };
+  const last = TRACK.length - 1;
+  if (utc >= TRACK[last].t) return { ...TRACK[last], i: last };
+  let lo = 0, hi = last, r = 0;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (TRACK[m].t <= utc) { r = m; lo = m + 1; } else hi = m - 1; }
+  const a = TRACK[r], b = TRACK[Math.min(r + 1, last)];
+  const f = b.t > a.t ? (utc - a.t) / (b.t - a.t) : 0;
+  return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f, i: r };
+}
+function buildMaps() {
+  const pts = TRACK.map((p) => [p.lat, p.lon]);
+  const dObd = MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0;   // TRACK はドラレコ軸なので OBD 参照時に戻す
+  const meta = TRACK.map((p) => { const o = obdAt(p.t - dObd); return { mode: o ? (o.modeR ?? o.mode) : -1, spd: o ? o.vsp : 0 }; });
+  TMETA = meta;
+  const draw = (map) => {
+    // 白フチ → 本線。モード色 × 車速線幅（replay と同じ表現、lib/flow.js の関数を使う）
+    let cur = null; const runs = [];
+    for (let i = 0; i < pts.length; i++) {
+      const col = modeColorOf(meta[i].mode), w = spdWidth(meta[i].spd);
+      if (!cur || cur.col !== col || cur.w !== w) { if (cur) cur.pts.push(pts[i]); cur = { col, w, pts: [pts[i]] }; runs.push(cur); }
+      else cur.pts.push(pts[i]);
+    }
+    for (const r of runs) L.polyline(r.pts, { color: '#f4f8ff', weight: r.w + 3, opacity: .85, lineCap: 'round', interactive: false }).addTo(map);
+    for (const r of runs) L.polyline(r.pts, { color: r.col, weight: r.w, opacity: 1, lineCap: 'round', interactive: false }).addTo(map);
+    L.circleMarker(pts[0], { radius: 6, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 1, weight: 1, interactive: false }).addTo(map);
+    L.circleMarker(pts[pts.length - 1], { radius: 6, color: '#e74c3c', fillColor: '#e74c3c', fillOpacity: 1, weight: 1, interactive: false }).addTo(map);
+    return L.circleMarker(pts[0], { radius: 8, color: '#fff', fillColor: '#4a9eff', fillOpacity: 1, weight: 3, interactive: false }).addTo(map);
+  };
+  mapOv = L.map('mapOv', { zoomControl: false, attributionControl: false, preferCanvas: true, keyboard: false });
+  tiles().addTo(mapOv); curOv = draw(mapOv);
+  mapOv.fitBounds(L.latLngBounds(pts).pad(0.1));
+  mapNav = L.map('mapNav', { zoomControl: false, attributionControl: false, preferCanvas: true, keyboard: false, dragging: false });
+  tiles().addTo(mapNav); curNav = draw(mapNav);
+  mapNav.setView(pts[0], 16);
+  applyTileStyle();
+  setTimeout(() => {
+    mapOv.invalidateSize(); mapNav.invalidateSize();
+    mapNav.setZoom(mapNav.getBoundsZoom(L.latLng(pts[0]).toBounds(FOLLOW_SPAN_M)));
+  }, 80);
+}
+
+// ─────────────────────────────── 描画
+function fmt(s) { s = Math.max(0, s); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0'); }
+/* 数値パネル: フロー図が出していない値だけを大きく出す（車速/rpm/SOC/各P/モード/G はフロー側） */
+function drawNums(o, ec, S) {
+  const rows = [
+    ['アクセル', o && isFinite(o.accel) ? o.accel.toFixed(0) : '--', '%'],
+    ['電費(累積)', ec && ec.D > 0.05 ? (ec.E / ec.D).toFixed(0) : '--', 'Wh/km'],
+    ['電費(500m)', ec && isFinite(ec.w500) ? ec.w500.toFixed(0) : '--', 'Wh/km'],
+    ['距離', ec ? ec.D.toFixed(1) : '--', 'km'],
+    ['経過', fmt(S - winS0), ''],
+    ['水温', o && isFinite(o.coolant) ? o.coolant.toFixed(0) : '--', '℃'],
+    ['12V系', o && isFinite(o.v12) ? o.v12.toFixed(1) : '--', 'V'],
+  ];
+  $('numList').innerHTML = rows.map(([k, v, u]) =>
+    `<div class="nrow"><span class="nk">${k}</span><span><span class="nv">${v}</span><span class="nu">${u}</span></span></div>`).join('');
+}
+/*
+ * グラフ系列。並びは「因果が上から下へ流れる」ように固定する:
+ *   ① 標高と勾配（地形＝入力） ② 車速（応答） ③ パワー（何がその速度を作ったか） ④ SOC・電費（収支）
+ * i-MMD はアクセル操作によらずエンジンを効率点で回して存在を意識させない制御なので、
+ * ドライバ入力より「いつエンジンが表に出て、SOC がどう動いたか」の対応が読みどころ。
+ * 時間軸は全系列ドラレコ UTC に統一する（OBD は +dObd で映像軸へ寄せる）。
+ */
+let GPANELS = null;
+const GRAPH_SPAN = 120;      // 表示幅[秒]（±60s）。1920px なら 15px/s で 1.84Hz の OBD でも十分密
+function buildGraphSeries(dObd) {
+  GPANELS = null;
+  if (!OBD.length) return;
+  // 標高: GPS 標高はスパイクが乗るので距離窓 ±30m で平滑し、60m 基線で勾配を出す（replay と同じ定義）
+  const cum = [0];
+  for (let i = 1; i < TRACK.length; i++)
+    cum[i] = cum[i - 1] + haversineMeters(TRACK[i - 1].lat, TRACK[i - 1].lon, TRACK[i].lat, TRACK[i].lon);
+  const eleSm = TRACK.map((p, i) => {
+    if (p.ele == null) return null;
+    let s = 0, n = 0;
+    for (let j = i; j >= 0 && cum[i] - cum[j] <= 30; j--) if (TRACK[j].ele != null) { s += TRACK[j].ele; n++; }
+    for (let j = i + 1; j < TRACK.length && cum[j] - cum[i] <= 30; j++) if (TRACK[j].ele != null) { s += TRACK[j].ele; n++; }
+    return n ? s / n : p.ele;
+  });
+  const elePts = [], gradPts = [];
+  for (let i = 0; i < TRACK.length; i++) {
+    if (eleSm[i] == null) continue;
+    elePts.push([TRACK[i].t, eleSm[i]]);
+    let j = i; while (j > 0 && cum[i] - cum[j] < 60) j--;
+    const dd = cum[i] - cum[j];
+    gradPts.push([TRACK[i].t, (dd > 1 && eleSm[j] != null) ? ((eleSm[i] - eleSm[j]) / dd) * 100 : 0]);
+  }
+  const ot = (s) => s.t + dObd;
+  const col = (i) => modeColorOf(OBD[i].modeR ?? OBD[i].mode);
+  const socPts = OBD.filter((s) => !isNaN(s.soc)).map((s) => [ot(s), s.soc]);
+  GPANELS = [
+    { h: 66, series: [
+        { name: '標高', color: '#8fbf6f', pts: elePts, fill: true, fmt: (v) => v.toFixed(0) + 'm' },
+        { name: '勾配', color: '#c98fef', axis: 'R', pts: gradPts, w: 1.3, fmt: (v) => v.toFixed(1) + '%' },
+      ], fmtR: (v) => v.toFixed(1) },
+    { h: 66, series: [
+        { name: '車速', color: '#e8f0f8', pts: OBD.map((s) => [ot(s), s.vsp]),
+          segColor: col, w: 2, fmt: (v) => v.toFixed(0) + 'km/h' },
+      ], yl: [0, 115] },
+    { h: 74, zero: true, series: [
+        { name: 'Psys', color: '#ffd24a', pts: OBD.map((s) => [ot(s), s.psys]), fmt: (v) => v.toFixed(1) + 'kW' },
+        { name: 'Pbat', color: '#4dd08a', pts: OBD.map((s) => [ot(s), s.pbat]), fmt: (v) => v.toFixed(1) + 'kW' },
+        { name: 'ENG', color: '#ff9a44', axis: 'R', pts: OBD.map((s) => [ot(s), s.rpm]), w: 1.3, fmt: (v) => v.toFixed(0) + 'rpm' },
+      ], yr: [0, 4500] },
+    { h: 64, series: [
+        { name: 'SOC', color: '#00e5ff', pts: socPts, fmt: (v) => v.toFixed(1) + '%' },
+        { name: '電費500m', color: '#ff7ab0', axis: 'R', pts: ECON.map((e) => [e.t + dObd, e.w500]),
+          w: 1.3, fmt: (v) => v.toFixed(0) + 'Wh/km' },
+      ], fmtL: (v) => v.toFixed(1) },
+  ];
+}
+
+function render() {
+  const utc = TL.sToUtc(S);
+  const o = obdAt(utc - (MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0));
+  const g = gAt(utc);                      // GSENS は映像と同一時間軸（オフセット補正なし）
+  // 元データは OBD 1.84Hz / G 10Hz しか変わらないので、60fps で SVG を作り直さない
+  const fkey = (o ? o.t : 0) + '|' + (g ? (g.gx * 100 | 0) + ',' + (g.gy * 100 | 0) : '-');
+  if (o && fkey !== lastFlowKey) {
+    lastFlowKey = fkey;
+    const mR = o.modeR ?? o.mode;
+    D.gShow = GSNS.length > 0;             // 枠は常に出す（データが無い区間はグレーアウト）
+    D.gNote = 'データなし';
+    D.gx = g ? g.gx : null; D.gy = g ? g.gy : null;
+    D.rawMode = o.mode;                     // トポロジとラベルは生モードで決める(遷移をTRANS表示)
+    D.runMode = mR; D.dispMode = mR; D.peng = o.peng; D.pgen = o.pgen; D.pbat = o.pbat;
+    D.pdrive = o.pdrive; D.engRot = o.rpm; D.vsp = o.vsp; D.soc = isNaN(o.soc) ? NaN : o.soc;
+    drawFlow($('flowSvg'));
+    $('hudNav').textContent = `${MODE_LABELS[mR] || mR}  ${o.vsp} km/h  ${Math.round(o.rpm)} rpm`;
+    $('hudOv').textContent = `Psys ${o.psys.toFixed(1)} kW   Pbat ${o.pbat.toFixed(1)} kW` + (isNaN(o.soc) ? '' : `   SOC ${o.soc.toFixed(0)}%`);
+    drawNums(o, econAt(utc - (MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0)), S);
+  }
+  // グラフは常に流れるので毎フレーム描くが、15px/s なので 0.08s 刻みで十分（1px 強しか動かない）
+  if (GPANELS && Math.abs(utc - lastGraphUtc) > 0.08) {
+    lastGraphUtc = utc;
+    drawGraph($('graphSvg'), GPANELS, utc, GRAPH_SPAN, CELL.graph[2], CELL.graph[3]);
+  }
+  const p = trackAt(utc);
+  if (p && mapNav) {
+    const ll = L.latLng(p.lat, p.lon);
+    curNav.setLatLng(ll); curOv.setLatLng(ll);
+    if (!navPos || ll.distanceTo(navPos) > 3) { mapNav.panTo(ll, { animate: false }); navPos = ll; }
+  }
+  $('tlabel').textContent = `${fmt(S - winS0)} / ${fmt(winS1 - winS0)}   ${new Date(utc * 1000).toLocaleTimeString('ja-JP')}`
+    + (perf.fps ? `   [${perf.fps}fps 描画${perf.ms}ms]` : '');
+  $('seek').value = Math.round(((S - winS0) / (winS1 - winS0)) * 1000);
+}
+
+// ─────────────────────────────── 動画（クリップ2枚のダブルバッファ）
+function urlOf(c, rear) {
+  if (rear) { if (!c.rearFile) return null; if (!c.rearUrl) c.rearUrl = URL.createObjectURL(c.rearFile); return c.rearUrl; }
+  if (!c.url) c.url = URL.createObjectURL(c.file);
+  return c.url;
+}
+function clipAtS(s) {
+  for (let i = 0; i < clipOrder.length; i++) { const c = CLIPS.get(clipOrder[i]); if (s >= c.S0 && s < c.S0 + c.duration) return i; }
+  return -1;
+}
+function nextClipIdx(i) { return i + 1 < clipOrder.length ? i + 1 : -1; }
+let curIdx = -1;
+async function setSrc(v, name, url, offset, dur) {
+  if (!url) { v.dataset.clip = ''; v.removeAttribute('src'); return; }   // リア欠けクリップは黒のまま
+  if (v.dataset.clip !== name) {
+    v.dataset.clip = name; v.src = url;
+    await new Promise((res) => { const h = () => { v.removeEventListener('loadedmetadata', h); res(); }; v.addEventListener('loadedmetadata', h); });
+  }
+  v.currentTime = Math.max(0, Math.min(offset, (v.duration || dur) - 0.02));
+}
+async function loadInto(vi, idx, offset) {
+  const name = clipOrder[idx], c = CLIPS.get(name);
+  // リアは前方と長さ・境界が完全一致（実測 差0.000s / creation_time 同一）なので同じ offset を与える
+  await Promise.all([setSrc(V[vi], name, urlOf(c, false), offset, c.duration),
+                     setSrc(VR[vi], name, urlOf(c, true), offset, c.duration)]);
+}
+function show(vi) {
+  for (const arr of [V, VR]) { arr[vi].classList.remove('off'); arr[1 - vi].classList.add('off'); arr[1 - vi].pause(); }
+  act = vi;
+}
+async function seekTo(s, keepPlaying = playing) {
+  S = Math.max(winS0, Math.min(winS1, s));
+  let idx = clipAtS(S);
+  if (idx < 0) {                                       // 欠けクリップ → 次に存在するクリップへ
+    idx = clipOrder.findIndex((n) => CLIPS.get(n).S0 >= S);
+    if (idx < 0) { setPlay(false); return; }
+    S = CLIPS.get(clipOrder[idx]).S0;
+  }
+  curIdx = idx; pending = { idx: -1, ready: false };
+  await loadInto(act, idx, S - CLIPS.get(clipOrder[idx]).S0);
+  show(act);
+  if (keepPlaying) { V[act].play().catch(() => {}); if (rearOn && VR[act].dataset.clip) VR[act].play().catch(() => {}); }
+  render();
+}
+function setPlay(p) {
+  playing = p; $('playBtn').textContent = p ? '❚❚' : '▶';
+  if (p) {
+    if (S >= winS1 - 0.1) { seekTo(winS0, true); return; }
+    V[act].play().catch(() => {});
+    if (rearOn && VR[act].dataset.clip) VR[act].play().catch(() => {});
+  } else { V[act].pause(); VR[act].pause(); }
+}
+function tick() {
+  requestAnimationFrame(tick);
+  const _t = performance.now();
+  if (curIdx < 0) return;
+  const c = CLIPS.get(clipOrder[curIdx]);
+  const v = V[act];
+  if (playing && !v.paused) S = c.S0 + v.currentTime;
+  if (S >= winS1) { setPlay(false); S = winS1; }
+  // 先読み: 残り PRELOAD_SEC を切ったら次クリップを裏で用意
+  const remain = (v.duration || c.duration) - v.currentTime;
+  const ni = nextClipIdx(curIdx);
+  if (playing && ni >= 0 && remain < PRELOAD_SEC && pending.idx !== ni) {
+    const mine = { idx: ni, ready: false };
+    pending = mine;
+    loadInto(1 - act, ni, 0).then(() => { if (pending === mine) mine.ready = true; })
+      .catch(() => { if (pending === mine) pending = { idx: -1, ready: false }; });
+  }
+  // 切替
+  if (playing && (v.ended || remain <= 0.05) && pending.idx >= 0 && pending.ready) {
+    const ni2 = pending.idx; pending = { idx: -1, ready: false };
+    curIdx = ni2; show(1 - act);
+    for (const a of [V, VR]) a[act].playbackRate = rate;
+    V[act].play().catch(() => {});
+    if (rearOn && VR[act].dataset.clip) VR[act].play().catch(() => {});
+  }
+  // リアは前方に追従（ドリフトしたら currentTime を合わせ直す）
+  const vr = VR[act];
+  if (rearOn && vr.dataset.clip) {
+    if (Math.abs(vr.currentTime - v.currentTime) > 0.15) vr.currentTime = v.currentTime;
+    if (playing && vr.paused) vr.play().catch(() => {});
+    if (!playing && !vr.paused) vr.pause();
+  }
+  render();
+}
+
+
+// ─────────────────────────────── 書き出し（テレメトリを JPEG 連番に）
+// 出力は 640×1440 の縦積み: y0-720 パワーフロー / 720-1080 俯瞰 / 1080-1440 ナビ。
+// 映像領域(前方 1280×720・リア 640×360)は書き出さず、ffmpeg 側で重ねる（黒の無駄が無い）。
+/*
+ * 書き出しキャンバスは表示と同じ 1920×1080。映像セル(前方/リア)は黒のままにして
+ * ffmpeg が上に重ねる。H.264 なので黒面はほぼ容量を食わず、crop を挟まないぶん
+ * 合成コマンドが単純になる（レイアウト変更にも追随しやすい）。
+ */
+const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false };
+const CELL = { video:[0,0,960,540], flow:[960,0,480,810], num:[1440,0,480,540],
+               rear:[0,540,480,270], nav:[480,540,480,270], ov:[1440,540,480,270],
+               graph:[0,810,1920,270] };
+let expFlowImg = null, expFlowKey = null;
+
+function svgDataUrl(svgEl, w, h) {
+  const c = svgEl.cloneNode(true);
+  // 単体画像として描画するので、位置指定は必ず落とす（position:absolute が残ると全面空白になる）
+  c.removeAttribute('style');
+  c.removeAttribute('class');
+  c.setAttribute('width', w); c.setAttribute('height', h);
+  c.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(c));
+}
+/** グラフを画像化。毎フレーム流れるのでキャッシュは効かない（フロー図と違い再ラスタライズ必須） */
+let expGraphImg = null;
+async function graphImageFor(utc) {
+  if (!GPANELS) return null;
+  drawGraph($('expGraph'), GPANELS, utc, GRAPH_SPAN, CELL.graph[2], CELL.graph[3]);
+  const img = new Image();
+  img.src = svgDataUrl($('expGraph'), CELL.graph[2], CELL.graph[3]);
+  await img.decode();
+  expGraphImg = img;
+  return img;
+}
+/** パワーフローを画像化。OBD サンプルが変わらない間は再ラスタライズしない（出力fpsより低レートなので効く） */
+async function flowImageFor(o, g) {
+  // G は 10Hz で変わるため、OBD サンプルと G の両方をキーにする
+  const key = (o ? o.t : 0) + '|' + (g ? g.gx.toFixed(3) + ',' + g.gy.toFixed(3) : '-');
+  if (key === expFlowKey && expFlowImg) return expFlowImg;
+  D.gShow = GSNS.length > 0; D.gNote = 'データなし';
+  D.gx = g ? g.gx : null; D.gy = g ? g.gy : null;
+  const mR = o.modeR ?? o.mode;
+  D.rawMode = o.mode;
+  D.runMode = mR; D.dispMode = mR; D.peng = o.peng; D.pgen = o.pgen; D.pbat = o.pbat;
+  D.pdrive = o.pdrive; D.engRot = o.rpm; D.vsp = o.vsp; D.soc = isNaN(o.soc) ? NaN : o.soc;
+  drawFlow($('expFlow'));
+  const img = new Image();
+  img.src = svgDataUrl($('expFlow'), CELL.flow[2], CELL.flow[3]);
+  await img.decode();
+  expFlowKey = key; expFlowImg = img;
+  return img;
+}
+function ffmpegCommand(fps, root, ovIn, ovNote) {
+  const w0 = (S) => S.toFixed(3);
+  // filter_complex は1本の引数。改行を入れない（Windows の cmd/PowerShell では行継続記号が異なるため、
+  // 1行にしておくのが Win/Mac 共通で唯一安全な形）。
+  // オーバーレイ自体が 1920×1080 の下地なので、映像2本を所定位置に重ねるだけで済む
+  const [vx, vy, vw, vh] = CELL.video, [rx, ry, rw, rh] = CELL.rear;
+  const fc = [
+    `[0:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
+    `[1:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
+    '[2:v]fps=30[t]',
+    `[t][f]overlay=${vx}:${vy}:shortest=1[a]`,
+    `[a][r]overlay=${rx}:${ry}:shortest=1[v]`,
+  ].join(';');
+  // -nostdin は必須。付けないと、この後に続く行を ffmpeg が対話コマンドとして読み取ってしまう。
+  const cmd = `ffmpeg -nostdin -hide_banner -f concat -safe 0 -i concat_front.txt -f concat -safe 0 -i concat_rear.txt ` +
+    `${ovIn} -filter_complex "${fc}" -map "[v]" ` +
+    `-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -r 30 -an -movflags +faststart out.mp4`;
+  return [
+    '# FL4 走行動画の合成',
+    '#',
+    '# このファイルがあるフォルダ（ov_*.jpg と concat_*.txt があるフォルダ）で、',
+    '# 最下部の ffmpeg 行を「1行のまま」実行する。Windows / Mac 共通。',
+    '#',
+    `# 出力: out.mp4  1920x1080 / 30fps / ${w0(winS1 - winS0)} 秒`,
+    `# 配置: テレメトリ(1920x1080)を下地に、前方(${vx},${vy} ${vw}x${vh}) → リア(${rx},${ry} ${rw}x${rh}) を重ねる。`,
+    `# 素材: 前方/リアは concat 後 ${w0(winS0)}〜${w0(winS1)} 秒を切り出す（映像・NMEA・OBD の共通区間）。`,
+    `# テレメトリ: ${ovNote}（${fps}fps で入力し 30fps に伸ばす）。`,
+    `# concat リストは絶対パスで生成済み（ドラレコSD: ${root || '(未指定)'}）。`,
+    '#',
+    '# 実行中に "Auto-inserting h264_mp4toannexb bitstream filter" が出るのは正常な情報表示。',
+    '# 単一ファイルなので連番の %% エスケープは不要。',
+    '',
+    cmd,
+    '',
+  ].join('\n');
+}
+/*
+ * オーバーレイの出力先を1本のファイルにする。
+ *  第1候補: WebCodecs で H.264 を Annex-B 形式で符号化し、生エレメンタリストリームとして書く。
+ *           ffmpeg は `-f h264` で直接読めるため、コンテナもマクサも外部ライブラリも要らない。
+ *           フレーム間圧縮が効くので、同じ絵で MJPEG の 1/3 以下（実測比較）になる。
+ *  代替   : MJPEG（JPEG を1本のファイルに連結）。`-f mjpeg` で読める。連番ファイルは作らない。
+ */
+/* 数値パネルの canvas 版。DOM はラスタライズできないので同じ内容を自前で描く */
+function drawNumsCanvas(ctx, o, ec, S) {
+  const [x, y, w, h] = CELL.num;
+  const rows = [
+    ['アクセル', o && isFinite(o.accel) ? o.accel.toFixed(0) : '--', '%'],
+    ['電費(累積)', ec && ec.D > 0.05 ? (ec.E / ec.D).toFixed(0) : '--', 'Wh/km'],
+    ['電費(500m)', ec && isFinite(ec.w500) ? ec.w500.toFixed(0) : '--', 'Wh/km'],
+    ['距離', ec ? ec.D.toFixed(1) : '--', 'km'],
+    ['経過', fmt(S - winS0), ''],
+    ['水温', o && isFinite(o.coolant) ? o.coolant.toFixed(0) : '--', '℃'],
+    ['12V系', o && isFinite(o.v12) ? o.v12.toFixed(1) : '--', 'V'],
+  ];
+  const pad = 12, rowH = (h - pad * 2) / rows.length;
+  ctx.save();
+  rows.forEach(([k, v, u], i) => {
+    const cy = y + pad + rowH * (i + 1) - 8;
+    ctx.font = '15px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#6f8ba0'; ctx.fillText(k, x + pad, cy);
+    ctx.textAlign = 'right';
+    ctx.font = '14px system-ui, sans-serif';
+    const uw = u ? ctx.measureText(u).width + 4 : 0;
+    if (u) ctx.fillText(u, x + w - pad, cy);
+    ctx.font = 'bold 30px system-ui, sans-serif'; ctx.fillStyle = '#cfe';
+    ctx.fillText(v, x + w - pad - uw, cy);
+    ctx.strokeStyle = '#16242e'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + pad, cy + 6); ctx.lineTo(x + w - pad, cy + 6); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+async function makeEncoder(fps, onChunk) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  const cands = ['avc1.4D0033', 'avc1.640033', 'avc1.42E033', 'avc1.4D401F', 'avc1.42E01E'];
+  for (const codec of cands) {
+    const cfg = { codec, width: EXP.W, height: EXP.H, framerate: fps, bitrate: 6e6,
+                  avc: { format: 'annexb' }, latencyMode: 'quality' };
+    try {
+      const sup = await VideoEncoder.isConfigSupported(cfg);
+      if (!sup || !sup.supported) continue;
+      const enc = new VideoEncoder({
+        output: (chunk) => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); onChunk(b); },
+        error: (e) => { console.error('VideoEncoder', e); },
+      });
+      enc.configure(sup.config || cfg);
+      return { enc, codec };
+    } catch (e) { /* 次の候補へ */ }
+  }
+  return null;
+}
+async function writeText(dir, name, text) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable(); await w.write(new Blob([text])); await w.close();
+}
+async function runExport() {
+  const fps = +$('expFps').value, quality = +$('expQ').value / 100, root = $('expRoot').value.trim();
+  if (!EXP.dir) return ($('expStat').textContent = '出力先フォルダを選んでください');
+  if (!root) return ($('expStat').textContent = 'ドラレコ SD の絶対パスを入力してください（concat リスト生成に必要）');
+  localStorage.setItem(ROOT_KEY, root);       // 次回の自動入力用に記憶
+  EXP.stop = false; EXP.running = true;
+  const wasPlaying = playing; setPlay(false);
+  const sep = root.includes('\\') ? '\\' : '/';
+  const join = (a, b) => a.replace(/[\/\\]+$/, '') + sep + b.split('/').join(sep);
+
+  // concat リスト（セッションのクリップのみ・絶対パス）
+  const fl = [], rl = [];
+  for (const n of clipOrder) {
+    const c = CLIPS.get(n);
+    fl.push(`file '${join(root, c.path)}'`);
+    rl.push(`file '${join(root, c.rearPath || c.path)}'`);
+  }
+  await writeText(EXP.dir, 'concat_front.txt', fl.join('\n') + '\n');
+  await writeText(EXP.dir, 'concat_rear.txt', rl.join('\n') + '\n');
+  await writeText(EXP.dir, 'sync.json', JSON.stringify(MAN, null, 2));
+
+  // 出力ストリーム（1ファイル）とエンコーダを用意
+  let wq = Promise.resolve(), bytes = 0;
+  const chunkOut = (b) => { bytes += b.length; wq = wq.then(() => ws.write(b)); };
+  const E = await makeEncoder(fps, chunkOut);
+  const ovName = E ? 'overlay.h264' : 'overlay.mjpeg';
+  const fh0 = await EXP.dir.getFileHandle(ovName, { create: true });
+  const ws = await fh0.createWritable();
+  const ovIn = E ? `-f h264 -framerate ${fps} -i overlay.h264` : `-f mjpeg -framerate ${fps} -i overlay.mjpeg`;
+  const ovNote = E ? `overlay.h264（生H.264 Annex-B / ${E.codec}）` : 'overlay.mjpeg（MJPEG）';
+  await writeText(EXP.dir, 'compose.txt', ffmpegCommand(fps, root, ovIn, ovNote));
+
+  const cv = new OffscreenCanvas(EXP.W, EXP.H), ctx = cv.getContext('2d');
+  const cache = new TileCache(TILE_STYLES[tileStyle].url);
+  const attrib = TILE_STYLES[tileStyle].attrib;
+  const dObd = MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0;
+  const colorOf = (m) => modeColorOf(m), widthOf = (v) => spdWidth(v);
+
+  /*
+   * マップの縮尺は「書き出しボタンを押した時点の再生アプリの表示状態」に固定する。
+   * 再生アプリのマップセルは 640×360 で書き出しキャンバスと同寸（CSS の transform は
+   * clientWidth を変えない）ため、ズーム値をそのまま流用できる。
+   * 自前のタイル描画は整数ズームのみ対応なので丸める。
+   */
+  const ovZ = mapOv ? Math.round(mapOv.getZoom()) : null;
+  const ovC = mapOv ? mapOv.getCenter() : null;
+  const [ovX, ovY, ovW, ovH] = CELL.ov;
+  const ovFit = (ovZ != null && ovC) ? { z: ovZ, lat: ovC.lat, lon: ovC.lng } : fitView(TRACK, ovW, ovH);
+  // 俯瞰は自車以外が静的 → 一度だけ描いて毎フレーム転写する
+  const ovView = makeView(ovFit.lat, ovFit.lon, ovFit.z, ovW, ovH);
+  const ovBase = new OffscreenCanvas(ovW, ovH), octx = ovBase.getContext('2d');
+  octx.fillStyle = '#0d1218'; octx.fillRect(0, 0, ovW, ovH);
+  await drawTiles(octx, cache, ovView, 0, 0);
+  drawRoute(octx, TRACK, TMETA, ovView, 0, 0, { colorOf, widthOf });
+  drawDot(octx, ovView, TRACK[0].lat, TRACK[0].lon, 0, 0, { r: 5, fill: '#2ecc71', ring: '#2ecc71', rw: 1 });
+  drawDot(octx, ovView, TRACK[TRACK.length - 1].lat, TRACK[TRACK.length - 1].lon, 0, 0, { r: 5, fill: '#e74c3c', ring: '#e74c3c', rw: 1 });
+  drawAttribution(octx, attrib, 0, 0, ovW, ovH);      // 俯瞰は静的画に焼き込む
+  // ナビも押した時点のズームを使う（中心は自車追従）。マップが無い場合のみ算出値にフォールバック
+  // （Leaflet の getBoundsZoom は縦横両方が収まる最大ズームを選ぶため、拘束条件は短辺）。
+  const [nvX, nvY, nvW, nvH] = CELL.nav;
+  const navZ = mapNav ? Math.round(mapNav.getZoom()) : zoomForSpan(FOLLOW_SPAN_M, Math.min(nvW, nvH), TRACK[0].lat);
+
+  $('expStat').textContent = `縮尺を固定: ナビ z${navZ} / 俯瞰 z${ovFit.z}（押した時点の表示状態）\n準備中…`;
+  const total = Math.ceil((winS1 - winS0) * fps);
+  const t0 = performance.now();
+  for (let k = 0; k < total; k++) {
+    if (EXP.stop) break;
+    const S = winS0 + k / fps;
+    const utc = TL.sToUtc(S);
+    const o = obdAt(utc - dObd);
+    const p = trackAt(utc);
+    ctx.fillStyle = '#0a1520'; ctx.fillRect(0, 0, EXP.W, EXP.H);
+    ctx.fillStyle = '#000';                              // 映像セルは黒（ffmpeg が上に重ねる）
+    ctx.fillRect(...CELL.video); ctx.fillRect(...CELL.rear);
+    if (o) ctx.drawImage(await flowImageFor(o, gAt(utc)), CELL.flow[0], CELL.flow[1], CELL.flow[2], CELL.flow[3]);
+    drawNumsCanvas(ctx, o, econAt(utc - dObd), S);
+    const gim = await graphImageFor(utc);
+    if (gim) ctx.drawImage(gim, CELL.graph[0], CELL.graph[1]);
+    ctx.drawImage(ovBase, ovX, ovY);
+    if (p) drawDot(ctx, ovView, p.lat, p.lon, ovX, ovY);
+    if (p) {
+      const nv = makeView(p.lat, p.lon, navZ, nvW, nvH);
+      ctx.save(); ctx.beginPath(); ctx.rect(nvX, nvY, nvW, nvH); ctx.clip();
+      ctx.fillStyle = '#0d1218'; ctx.fillRect(nvX, nvY, nvW, nvH);
+      await drawTiles(ctx, cache, nv, nvX, nvY);
+      const [a, b] = visibleRange(TRACK, nv, p.i);
+      drawRoute(ctx, TRACK, TMETA, nv, nvX, nvY, { colorOf, widthOf, from: a, to: b });
+      drawDot(ctx, nv, p.lat, p.lon, nvX, nvY);
+      drawAttribution(ctx, attrib, nvX, nvY, nvW, nvH);   // ナビにも毎フレーム焼き込む
+      ctx.restore();
+    }
+    if (E) {
+      const vf = new VideoFrame(cv, { timestamp: Math.round((k / fps) * 1e6), duration: Math.round(1e6 / fps) });
+      E.enc.encode(vf, { keyFrame: k % (fps * 2) === 0 });
+      vf.close();
+      while (E.enc.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 0));   // バックプレッシャ
+    } else {
+      chunkOut(new Uint8Array(await (await cv.convertToBlob({ type: 'image/jpeg', quality })).arrayBuffer()));
+    }
+    if (k % 10 === 0 || k === total - 1) {
+      const el = (performance.now() - t0) / 1000, rate = (k + 1) / el;
+      $('expStat').textContent =
+        `ナビ z${navZ} / 俯瞰 z${ovFit.z}   ${ovName}\n${k + 1} / ${total} フレーム (${(((k + 1) / total) * 100).toFixed(1)}%)  ${rate.toFixed(1)} fps\n` +
+        `経過 ${(el / 60).toFixed(1)}分  残り ${(((total - k - 1) / rate) / 60).toFixed(1)}分  ` +
+        `書き込み ${(bytes / 1e6).toFixed(0)} MB (推定合計 ${((bytes / (k + 1)) * total / 1e6).toFixed(0)} MB)\n` +
+        `タイル取得 ${cache.miss} / キャッシュヒット ${cache.hits}`;
+      await new Promise((r) => setTimeout(r, 0));   // UI に制御を返す
+    }
+  }
+  if (E) { await E.enc.flush(); E.enc.close(); }
+  await wq; await ws.close();
+  EXP.running = false;
+  $('expStat').textContent += EXP.stop
+    ? `\n中止した（${ovName} はここまでの分が残る）`
+    : `\n完了 → ${ovName} (${(bytes / 1e6).toFixed(0)} MB)。compose.txt の ffmpeg コマンドを実行して合成する。`;
+  if (wasPlaying) setPlay(true);
+}
+
+// ─────────────────────────────── UI
+function fitStage() {
+  const w = $('stageWrap').clientWidth, h = $('stageWrap').clientHeight;
+  const k = Math.min(w / 1920, h / 1080);
+  const st = $('stage');
+  st.style.transform = `scale(${k})`;
+  st.style.left = Math.max(0, (w - 1920 * k) / 2) + 'px';
+  st.style.top = Math.max(0, (h - 1080 * k) / 2) + 'px';
+}
+addEventListener('resize', fitStage);
+
+let dirEntries = null, dirLabel = null;
+$('pickDir').onclick = async () => {
+  try {
+    const h = await window.showDirectoryPicker();
+    msg('フォルダを走査中…');
+    dirEntries = await collectFromDirectory(h);
+    dirLabel = h.name;                       // 絶対パスは API から取得できないので名前だけ保持
+    $('dirName').textContent = `${h.name} (${dirEntries.length} ファイル)`;
+    msg('');
+  } catch (e) { if (e.name !== 'AbortError') msg('フォルダ選択に失敗: ' + e.message + '\n下の複数ファイル選択を使ってください。'); }
+};
+if (!window.showDirectoryPicker) { $('pickDir').disabled = true; $('dirName').textContent = 'この環境では非対応（下の複数選択を使用）'; }
+
+$('goBtn').onclick = async () => {
+  try {
+    const txt = $('fTxt').files[0];
+    if (!txt) return msg('OBD フレームログ (.txt) を選んでください');
+    const entries = dirEntries || collectFromInput($('fFiles').files);
+    if (!dirLabel && entries.length) {
+      const rp = entries[0].path || '';
+      if (rp.includes('/')) dirLabel = rp.split('/')[0];   // webkitRelativePath の先頭がフォルダ名
+    }
+    if (!entries.length) return msg('ドラレコのフォルダ、または MP4+NMEA を選んでください');
+    $('goBtn').disabled = true;
+    const m = await load(entries, txt, $('fGpx').files[0] || null);
+    $('loader').style.display = 'none'; $('app').classList.add('on');
+    fitStage(); buildMaps();
+    V.push($('vA'), $('vB')); VR.push($('vRA'), $('vRB'));
+    const w = [...m.warnings];
+    if (m.timing) w.push('読込内訳: ' + m.timing.join(' / '));
+    if (m.info.length) w.push(...m.info);
+    $('warn').textContent = w.join('  /  ');
+    await seekTo(winS0, false);
+    tick();
+  } catch (e) { $('goBtn').disabled = false; msg('読み込み失敗: ' + e.message); console.error(e); }
+};
+
+$('rearBtn').onclick = () => {
+  rearOn = !rearOn;
+  $('rearBtn').classList.toggle('on', rearOn);
+  for (const v of VR) { if (!rearOn) v.pause(); v.style.visibility = rearOn ? '' : 'hidden'; }
+  if (rearOn && playing && VR[act].dataset.clip) { VR[act].currentTime = V[act].currentTime; VR[act].play().catch(() => {}); }
+};
+(function initTileStyle() {
+  const sel = $('tileStyle');
+  for (const [k, v] of Object.entries(TILE_STYLES)) {
+    const o = document.createElement('option'); o.value = k; o.textContent = v.label; sel.appendChild(o);
+  }
+  sel.value = tileStyle;
+  sel.onchange = () => { tileStyle = sel.value; localStorage.setItem(TILE_KEY, tileStyle); applyTileStyle(); };
+})();
+$('playBtn').onclick = () => setPlay(!playing);
+$('seek').oninput = (e) => { seekTo(winS0 + (winS1 - winS0) * (e.target.value / 1000)); };
+$('back5').onclick = () => seekTo(S - 5);
+$('fwd10').onclick = () => seekTo(S + 10);
+for (const el of document.querySelectorAll('.spd[data-s]')) el.onclick = () => {
+  document.querySelectorAll('.spd[data-s]').forEach((x) => x.classList.remove('on'));
+  el.classList.add('on'); rate = +el.dataset.s; for (const v of [...V, ...VR]) v.playbackRate = rate;
+};
+/*
+ * SD の絶対パスは File System Access API から取得できない（handle は .name のみ）。
+ * そのため「前回入力値を記憶」＋「フォルダ名からの推定」で自動補完する。
+ * macOS のリムーバブルは /Volumes/<名前> に必ずマウントされるので推定が確実に効く。
+ */
+const ROOT_KEY = 'fl4obd.video.sdroot';
+function guessSdRoot() {
+  const saved = localStorage.getItem(ROOT_KEY);
+  if (saved && (!dirLabel || saved.replace(/[\/\\]+$/, '').endsWith(dirLabel))) return saved;
+  const mac = /Mac/i.test(navigator.userAgent) || /Mac/i.test(navigator.platform || '');
+  if (dirLabel && mac) return '/Volumes/' + dirLabel;
+  return saved || '';
+}
+$('expBtn').onclick = () => {
+  $('expPanel').classList.add('on');
+  if (!$('expRoot').value) {
+    const g = guessSdRoot();
+    if (g) { $('expRoot').value = g; $('expStat').textContent = `SD の絶対パスを自動入力した（${g}）。違う場合は書き換える。`; }
+  }
+};
+$('expClose').onclick = () => { $('expPanel').classList.remove('on'); };
+$('expStop').onclick = () => { EXP.stop = true; };
+$('expQ').oninput = (e) => { $('expQv').textContent = e.target.value; };
+$('expPick').onclick = async () => {
+  try {
+    EXP.dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+    $('expDir').textContent = EXP.dir.name;
+  } catch (e) { if (e.name !== 'AbortError') $('expStat').textContent = 'フォルダ選択に失敗: ' + e.message; }
+};
+$('expGo').onclick = () => { if (!EXP.running) runExport().catch((e) => { EXP.running = false; $('expStat').textContent = '失敗: ' + e.message; console.error(e); }); };
+$('dlSync').onclick = () => {
+  const b = new Blob([JSON.stringify(MAN, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'sync.json'; a.click();
+};
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); setPlay(!playing); }
+  else if (e.code === 'ArrowLeft') seekTo(S - 5);
+  else if (e.code === 'ArrowRight') seekTo(S + 10);
+});
+</script>
+</body>
+</html>
