@@ -37,6 +37,13 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 .conn-btn:active {transform:scale(.98);}
 .conn-btn:disabled{opacity:.35;cursor:not-allowed;}
 .conn-btn.rec{border-color:#cc3333 !important;color:#cc3333 !important;animation:blink 1s infinite;}
+/* 下部サブボタン行: 5個を1行に収める。conn-btn の width:100%/padding/letter-spacing を
+   打ち消し、flex で等分・縮小可にする。テキストは折り返さない。 */
+.navbar{display:flex;gap:4px;margin-bottom:0;}
+.navbar>*{flex:1 1 0;min-width:0;width:auto;margin-bottom:0;
+  padding:9px 1px;font-size:10px;letter-spacing:0;white-space:nowrap;overflow:hidden;
+  background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;
+  text-decoration:none;display:flex;align-items:center;justify-content:center;}
 .conn-btn.rec:hover{border-color:#ff4444 !important;color:#ff4444 !important;}
 
 /* 2x2 ANALOG METERS — 最上部・極力大きく */
@@ -286,12 +293,12 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 
 <button class="conn-btn" id="recBtn" onclick="toggleRec()">● REC</button>
 
-<div style="display:flex;gap:6px;margin-bottom:0;">
-  <button class="conn-btn" id="gpsBtn" onclick="toggleGps()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ GPS ]</button>
-  <button class="conn-btn" id="demoBtn" onclick="toggleDemo()" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;">[ DEMO ]</button>
-  <a href="viewer.html" target="_blank" class="conn-btn" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;">[ LOG VIEWER ]</a>
-  <a href="replay.html" target="_blank" class="conn-btn" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;">[ REPLAY ]</a>
-  <a href="video.html" target="_blank" class="conn-btn" style="background:#0d1520;border-color:#1a3a5a;color:#2a5a7a;font-size:10px;text-decoration:none;display:flex;align-items:center;justify-content:center;">[ VIDEO ]</a>
+<div class="navbar">
+  <button class="conn-btn" id="gpsBtn" onclick="toggleGps()">[ GPS ]</button>
+  <button class="conn-btn" id="demoBtn" onclick="toggleDemo()">[ DEMO ]</button>
+  <a href="viewer.html" target="_blank" class="conn-btn">[ VIEWER ]</a>
+  <a href="replay.html" target="_blank" class="conn-btn">[ REPLAY ]</a>
+  <a href="video.html" target="_blank" class="conn-btn">[ VIDEO ]</a>
 </div>
 </div><!-- /app -->
 
@@ -1281,7 +1288,6 @@ function demoTick() {
 function startDemo() {
   if (demoTimer) return;
   demoRunning = true;
-  document.getElementById('demoBtn').textContent = '[ DEMO 停止 ]';
   document.getElementById('demoBtn').style.color = '#ffaa00';
   document.getElementById('demoBtn').style.borderColor = '#ffaa00';
   demoTimer = setInterval(demoTick, 600);
@@ -1290,7 +1296,6 @@ function startDemo() {
 function stopDemo() {
   demoRunning = false;
   clearInterval(demoTimer); demoTimer = null;
-  document.getElementById('demoBtn').textContent = '[ DEMO ]';
   document.getElementById('demoBtn').style.color = '#2a5a7a';
   document.getElementById('demoBtn').style.borderColor = '#1a3a5a';
 }
