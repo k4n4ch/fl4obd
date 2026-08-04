@@ -26,13 +26,14 @@
   /* 出力と同一の 1920x1080。ここに映るものがそのまま書き出し対象になる */
   #stage { position:absolute; top:0; left:0; width:1920px; height:1080px; transform-origin:top left; background:#000; }
   #stage > div { position:absolute; overflow:hidden; background:#0a1520; }
-  /* 480×270 格子。前方は 0.75倍(960×540)、フローは縦に2段ぶん(480×810) */
+  /* 480×270 格子。前方は 0.75倍(960×540)、フローは縦に2段ぶん(480×810)。
+     ナビと俯瞰は下段で隣接させる（地図どうしを離さない） */
   #vcell   { left:0;     top:0;   width:960px;  height:540px; background:#000; }
-  #flowcell{ left:960px;  top:0;   width:480px;  height:810px; }
-  #numcell { left:1440px; top:0;   width:480px;  height:540px; }
+  #flowcell{ left:1440px; top:0;   width:480px;  height:810px; }
+  #numcell { left:960px;  top:0;   width:480px;  height:540px; }
   #rearcell{ left:0;     top:540px; width:480px; height:270px; background:#000; }
   #navcell { left:480px;  top:540px; width:480px; height:270px; }
-  #ovcell  { left:1440px; top:540px; width:480px; height:270px; }
+  #ovcell  { left:960px;  top:540px; width:480px; height:270px; }
   #graphcell{ left:0;    top:810px; width:1920px; height:270px; }
   #graphcell svg { width:100%; height:100%; display:block; }
   /* 数値パネル: フロー図に出ていない値だけを大きく出す */
@@ -625,8 +626,8 @@ function tick() {
  * 合成コマンドが単純になる（レイアウト変更にも追随しやすい）。
  */
 const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false };
-const CELL = { video:[0,0,960,540], flow:[960,0,480,810], num:[1440,0,480,540],
-               rear:[0,540,480,270], nav:[480,540,480,270], ov:[1440,540,480,270],
+const CELL = { video:[0,0,960,540], num:[960,0,480,540], flow:[1440,0,480,810],
+               rear:[0,540,480,270], nav:[480,540,480,270], ov:[960,540,480,270],
                graph:[0,810,1920,270] };
 let expFlowImg = null, expFlowKey = null;
 
