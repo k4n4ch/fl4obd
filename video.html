@@ -499,7 +499,9 @@ function buildGraphSeries(dObd) {
         { name: '車速', color: '#e8f0f8', pts: OBD.map((s) => [ot(s), s.vsp]),
           segColor: col, w: 2, fmt: (v) => v.toFixed(0) + 'km/h' },
       ] },
-    { h: 74, zero: true, minL: 20, minR: 2000, series: [   // 電力 ±10kW / ENG 2000rpm
+    // Psys と Pbat は**同一の左軸**に乗せ、**0 を中心に対称**にする。
+    // 0 が中央にないと、同じ大きさの力行と回生が違う長さに見えて比較できない。
+    { h: 74, zero: true, minL: 20, symL: true, minR: 2000, series: [   // 電力 ±10kW / ENG 2000rpm
         { name: 'Psys', color: '#ffd24a', pts: OBD.map((s) => [ot(s), s.psys]), fmt: (v) => v.toFixed(1) + 'kW' },
         { name: 'Pbat', color: '#4dd08a', pts: OBD.map((s) => [ot(s), s.pbat]), fmt: (v) => v.toFixed(1) + 'kW' },
         { name: 'ENG', color: '#ff9a44', axis: 'R', pts: OBD.map((s) => [ot(s), s.rpm]), w: 1.3, fmt: (v) => v.toFixed(0) + 'rpm' },
