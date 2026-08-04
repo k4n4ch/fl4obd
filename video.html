@@ -471,21 +471,26 @@ function buildGraphSeries(dObd) {
   const ot = (s) => s.t + dObd;
   const col = (i) => modeColorOf(OBD[i].modeR ?? OBD[i].mode);
   const socPts = OBD.filter((s) => !isNaN(s.soc)).map((s) => [ot(s), s.soc]);
+  /*
+   * 各パネルに**自動スケールの最小スパン**を与える。素の自動だと値が動かない区間で
+   * レンジが縮みノイズが拡大され、固定レンジだと低速域で線が下端に張り付いて死ぬ。
+   * 最小スパンは「その量が実走行で意味を持つ最小の変化幅」に取る。
+   */
   GPANELS = [
-    { h: 66, series: [
+    { h: 66, minL: 30, minR: 8, series: [        // 標高 30m / 勾配 ±4%
         { name: '標高', color: '#8fbf6f', pts: elePts, fill: true, fmt: (v) => v.toFixed(0) + 'm' },
         { name: '勾配', color: '#c98fef', axis: 'R', pts: gradPts, w: 1.3, fmt: (v) => v.toFixed(1) + '%' },
       ], fmtR: (v) => v.toFixed(1) },
-    { h: 66, series: [
+    { h: 66, minL: 40, zeroL: true, series: [    // 車速は 0 起点、最小 40km/h 幅
         { name: '車速', color: '#e8f0f8', pts: OBD.map((s) => [ot(s), s.vsp]),
           segColor: col, w: 2, fmt: (v) => v.toFixed(0) + 'km/h' },
-      ], yl: [0, 115] },
-    { h: 74, zero: true, series: [
+      ] },
+    { h: 74, zero: true, minL: 20, minR: 2000, series: [   // 電力 ±10kW / ENG 2000rpm
         { name: 'Psys', color: '#ffd24a', pts: OBD.map((s) => [ot(s), s.psys]), fmt: (v) => v.toFixed(1) + 'kW' },
         { name: 'Pbat', color: '#4dd08a', pts: OBD.map((s) => [ot(s), s.pbat]), fmt: (v) => v.toFixed(1) + 'kW' },
         { name: 'ENG', color: '#ff9a44', axis: 'R', pts: OBD.map((s) => [ot(s), s.rpm]), w: 1.3, fmt: (v) => v.toFixed(0) + 'rpm' },
-      ], yr: [0, 4500] },
-    { h: 64, series: [
+      ], zeroR: true },
+    { h: 64, minL: 6, minR: 200, series: [       // SOC 6% / 電費 200Wh/km
         { name: 'SOC', color: '#00e5ff', pts: socPts, fmt: (v) => v.toFixed(1) + '%' },
         { name: '電費500m', color: '#ff7ab0', axis: 'R', pts: ECON.map((e) => [e.t + dObd, e.w500]),
           w: 1.3, fmt: (v) => v.toFixed(0) + 'Wh/km' },

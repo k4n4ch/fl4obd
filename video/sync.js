@@ -252,7 +252,7 @@ export function parseObdLog(text, { timeMode = 'ok' } = {}) {
             mode: W[79],
             coolant: W[102] - 40,
             pbat: s16(W, 86) * 0.01,
-            accel: (W[19] * 100) / 255, // logger byte17 = APS1 → webapp W[19]
+            accel: apsPedal(W[19]),     // logger byte17 = APS1 → webapp W[19]
             v12: W[16] * 0.1,
             drv: s16(W, 90),            // 駆動トルク(raw)
             gen: s16(W, 92),            // 発電機トルク(raw)
@@ -309,6 +309,24 @@ export function resolveModes(samples) {
  * 生の 2920 サンプルからパワーフロー描画に必要な派生量を計算する。
  * SOC は実測 5B が来たら再アンカーし、その間を ∫Pbat で前進させる（表示専用）。
  */
+/*
+ * APS1（アクセルペダルセンサ）を踏み込み率[%]に直す。
+ *
+ * 生値は PID49 と同じ `A×100/255` で、これは**センサの電圧比であってペダル
+ * 踏み込み率ではない**。APS は断線検出のため下端に余裕を持たせてあり、
+ * 足を完全に離しても 0 にならない。
+ *
+ * 実測（走行ログ 22 本）: 床 19.22–19.61 %（49–50 LSB、1 LSB 以内で安定）、
+ * 全開 94.9–95.3 %（242–243 LSB）。この 2 点で正規化する。
+ *
+ * これをやらないと「足を離しているのにアクセル 20%」と表示される。
+ */
+const APS_FLOOR = 19.4, APS_FULL = 95.1;
+function apsPedal(raw) {
+  const pct = (raw * 100) / 255;
+  return Math.max(0, Math.min(100, ((pct - APS_FLOOR) / (APS_FULL - APS_FLOOR)) * 100));
+}
+
 export function deriveTelemetry(obd) {
   const socAnchors = obd.soc || [];
   let ai = 0, socR = NaN, prevT = null;
