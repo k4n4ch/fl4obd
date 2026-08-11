@@ -105,6 +105,10 @@
     <span class="spd" data-s="2">2x</span>
     <span class="spd" data-s="4">4x</span>
     <span class="spd on" id="rearBtn">リア</span>
+    <span class="spd" id="markA" title="現在位置を書き出しの始点にする">[ 始点</span>
+    <span class="spd" id="markB" title="現在位置を書き出しの終点にする">終点 ]</span>
+    <span class="spd" id="markClr" title="書き出し区間を全区間に戻す">区間解除</span>
+    <span id="rangeLabel" style="color:#5a8; font-variant-numeric:tabular-nums"></span>
     <select id="tileStyle" class="spd" style="color:#5a8"></select>
     <span class="spd" id="expBtn">⤓ 書き出し</span>
     <span class="spd" id="dlSync">⤓ sync.json</span>
@@ -114,6 +118,7 @@
   <div id="expPanel">
     <div id="expCard">
       <h3 style="margin:0 0 8px; color:#4a9eff; font-size:14px">オーバーレイ書き出し</h3>
+      <div id="expRange" style="color:#5a8; margin-bottom:8px; font-size:12px"></div>
       <div style="color:#8ab; margin-bottom:8px; font-size:11px">テレメトリを JPEG 連番で書き出す。映像との合成はローカルの ffmpeg 1コマンドで行う。</div>
       <label>オーバーレイ fps</label>
       <select id="expFps"><option value="10" selected>10 (推奨)</option><option value="5">5 (容量半分)</option><option value="15">15</option></select>
@@ -696,7 +701,28 @@ function tick() {
  * ffmpeg が上に重ねる。H.264 なので黒面はほぼ容量を食わず、crop を挟まないぶん
  * 合成コマンドが単純になる（レイアウト変更にも追随しやすい）。
  */
-const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false };
+const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false, a: null, b: null };
+/*
+ * 書き出し区間。未指定なら共通区間の全体。
+ * 書き出しパネルはモーダルで再生位置を動かせないので、印は操作バー側で付ける。
+ */
+function expRange() {
+  let a = EXP.a != null ? EXP.a : winS0;
+  let b = EXP.b != null ? EXP.b : winS1;
+  if (b < a) [a, b] = [b, a];
+  return [Math.max(winS0, a), Math.min(winS1, b)];
+}
+function updateRangeLabel() {
+  const [a, b] = expRange();
+  const whole = EXP.a == null && EXP.b == null;
+  $('markA').classList.toggle('on', EXP.a != null);
+  $('markB').classList.toggle('on', EXP.b != null);
+  $('rangeLabel').textContent = whole ? '' : `書き出し ${fmt(a - winS0)}〜${fmt(b - winS0)} (${fmt(b - a)})`;
+  const el = $('expRange');
+  if (el) el.textContent = whole
+    ? `書き出し区間: 全体 ${fmt(b - a)}（操作バーの [始点/終点] で絞れる）`
+    : `書き出し区間: ${fmt(a - winS0)}〜${fmt(b - winS0)}  長さ ${fmt(b - a)}`;
+}
 const CELL = { video:[0,0,960,540], num:[960,0,480,540], flow:[1440,0,480,810],
                rear:[0,540,480,270], nav:[480,540,480,270], ov:[960,540,480,270],
                graph:[0,810,1920,270] };
@@ -741,14 +767,15 @@ async function flowImageFor(o, g) {
   return img;
 }
 function ffmpegCommand(fps, root, ovIn, ovNote) {
+  const [rA, rB] = expRange();
   const w0 = (S) => S.toFixed(3);
   // filter_complex は1本の引数。改行を入れない（Windows の cmd/PowerShell では行継続記号が異なるため、
   // 1行にしておくのが Win/Mac 共通で唯一安全な形）。
   // オーバーレイ自体が 1920×1080 の下地なので、映像2本を所定位置に重ねるだけで済む
   const [vx, vy, vw, vh] = CELL.video, [rx, ry, rw, rh] = CELL.rear;
   const fc = [
-    `[0:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
-    `[1:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
+    `[0:v]trim=start=${w0(rA)}:end=${w0(rB)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
+    `[1:v]trim=start=${w0(rA)}:end=${w0(rB)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
     '[2:v]fps=30[t]',
     `[t][f]overlay=${vx}:${vy}:shortest=1[a]`,
     `[a][r]overlay=${rx}:${ry}:shortest=1[v]`,
@@ -846,7 +873,10 @@ async function runExport() {
   const sep = root.includes('\\') ? '\\' : '/';
   const join = (a, b) => a.replace(/[\/\\]+$/, '') + sep + b.split('/').join(sep);
 
-  // concat リスト（セッションのクリップのみ・絶対パス）
+  /*
+   * concat リストはセッション全クリップを並べる（区間の切り出しは ffmpeg の trim が行う）。
+   * クリップ単位で間引くと trim の起点がセッション先頭からの秒数と合わなくなる。
+   */
   const fl = [], rl = [];
   for (const n of clipOrder) {
     const c = CLIPS.get(n);
@@ -899,11 +929,12 @@ async function runExport() {
   const navZ = mapNav ? Math.round(mapNav.getZoom()) : zoomForSpan(FOLLOW_SPAN_M, Math.min(nvW, nvH), TRACK[0].lat);
 
   $('expStat').textContent = `縮尺を固定: ナビ z${navZ} / 俯瞰 z${ovFit.z}（押した時点の表示状態）\n準備中…`;
-  const total = Math.ceil((winS1 - winS0) * fps);
+  const [rA, rB] = expRange();
+  const total = Math.ceil((rB - rA) * fps);
   const t0 = performance.now();
   for (let k = 0; k < total; k++) {
     if (EXP.stop) break;
-    const S = winS0 + k / fps;
+    const S = rA + k / fps;
     const utc = TL.sToUtc(S);
     const o = obdAt(utc - dObd);
     const p = trackAt(utc);
@@ -997,6 +1028,7 @@ $('goBtn').onclick = async () => {
     if (m.timing) w.push('読込内訳: ' + m.timing.join(' / '));
     if (m.info.length) w.push(...m.info);
     $('warn').textContent = w.join('  /  ');
+    updateRangeLabel();
     await seekTo(winS0, false);
     tick();
   } catch (e) { $('goBtn').disabled = false; msg('読み込み失敗: ' + e.message); console.error(e); }
@@ -1037,7 +1069,11 @@ function guessSdRoot() {
   if (dirLabel && mac) return '/Volumes/' + dirLabel;
   return saved || '';
 }
+$('markA').onclick = () => { EXP.a = S; updateRangeLabel(); };
+$('markB').onclick = () => { EXP.b = S; updateRangeLabel(); };
+$('markClr').onclick = () => { EXP.a = EXP.b = null; updateRangeLabel(); };
 $('expBtn').onclick = () => {
+  updateRangeLabel();
   $('expPanel').classList.add('on');
   if (!$('expRoot').value) {
     const g = guessSdRoot();
