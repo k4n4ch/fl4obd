@@ -706,6 +706,35 @@ const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false, a: null,
  * 書き出し区間。未指定なら共通区間の全体。
  * 書き出しパネルはモーダルで再生位置を動かせないので、印は操作バー側で付ける。
  */
+/*
+ * S（再生アプリの動画時間）と concat 時間の変換。
+ *
+ * **この2つは一致しない。** S は録画の切れ目を含む（アンカーを正しく求めるため、
+ * creation_time の差が尺を超える分だけ S0 を進めてある）。一方 ffmpeg の concat は
+ * クリップを隙間なく繋ぐので切れ目を持たない。
+ * 実測（2026-08-10 07:34 の走行）では S=2171s に 9.0s の切れ目があり、それ以降は
+ * 一律 9.0s ずれていた。書き出しの区間指定もオーバーレイと映像の同期もこれで狂う。
+ * よって**オーバーレイは concat 時間で生成し**、ffmpeg の trim にも concat 時間を渡す。
+ */
+function sToConcat(S) {
+  let acc = 0;
+  for (const c of MAN.session.clips) {
+    if (S < c.S0) return acc;                       // 切れ目の中 → 直前のクリップ末尾
+    if (S < c.S0 + c.duration) return acc + (S - c.S0);
+    acc += c.duration;
+  }
+  return acc;
+}
+function concatToS(t) {
+  let acc = 0;
+  for (const c of MAN.session.clips) {
+    if (t < acc + c.duration) return c.S0 + (t - acc);
+    acc += c.duration;
+  }
+  const l = MAN.session.clips[MAN.session.clips.length - 1];
+  return l ? l.S0 + l.duration : 0;
+}
+
 function expRange() {
   let a = EXP.a != null ? EXP.a : winS0;
   let b = EXP.b != null ? EXP.b : winS1;
@@ -768,14 +797,15 @@ async function flowImageFor(o, g) {
 }
 function ffmpegCommand(fps, root, ovIn, ovNote) {
   const [rA, rB] = expRange();
+  const cA = sToConcat(rA), cB = sToConcat(rB);   // trim は concat 時間で指定する
   const w0 = (S) => S.toFixed(3);
   // filter_complex は1本の引数。改行を入れない（Windows の cmd/PowerShell では行継続記号が異なるため、
   // 1行にしておくのが Win/Mac 共通で唯一安全な形）。
   // オーバーレイ自体が 1920×1080 の下地なので、映像2本を所定位置に重ねるだけで済む
   const [vx, vy, vw, vh] = CELL.video, [rx, ry, rw, rh] = CELL.rear;
   const fc = [
-    `[0:v]trim=start=${w0(rA)}:end=${w0(rB)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
-    `[1:v]trim=start=${w0(rA)}:end=${w0(rB)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
+    `[0:v]trim=start=${w0(cA)}:end=${w0(cB)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
+    `[1:v]trim=start=${w0(cA)}:end=${w0(cB)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
     '[2:v]fps=30[t]',
     `[t][f]overlay=${vx}:${vy}:shortest=1[a]`,
     `[a][r]overlay=${rx}:${ry}:shortest=1[v]`,
@@ -930,11 +960,12 @@ async function runExport() {
 
   $('expStat').textContent = `縮尺を固定: ナビ z${navZ} / 俯瞰 z${ovFit.z}（押した時点の表示状態）\n準備中…`;
   const [rA, rB] = expRange();
-  const total = Math.ceil((rB - rA) * fps);
+  const cA = sToConcat(rA), cB = sToConcat(rB);      // 映像と同じ concat 時間で回す
+  const total = Math.ceil((cB - cA) * fps);
   const t0 = performance.now();
   for (let k = 0; k < total; k++) {
     if (EXP.stop) break;
-    const S = rA + k / fps;
+    const S = concatToS(cA + k / fps);
     const utc = TL.sToUtc(S);
     const o = obdAt(utc - dObd);
     const p = trackAt(utc);
