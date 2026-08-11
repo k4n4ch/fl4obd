@@ -570,7 +570,15 @@ function render() {
   if (p && mapNav) {
     const ll = L.latLng(p.lat, p.lon);
     curNav.setLatLng(ll); curOv.setLatLng(ll);
-    if (!navPos || ll.distanceTo(navPos) > 3) { mapNav.panTo(ll, { animate: false }); navPos = ll; }
+    /*
+     * 追従のしきい値は距離でなく「画面上の移動量」で決める。
+     * 固定 3m だと拡大するほど1回の飛びが大きくなり、カクつきとして見える
+     * （北緯36°で z17 なら 3m ≒ 3px、z19 なら ≒12px）。
+     * 1px 相当に取ると、Leaflet の位置指定が整数pxである以上これ以上滑らかにはならない
+     * 粒度まで詰められる。低ズームでは自動的に間引かれるので負荷も増えない。
+     */
+    const mpp = (156543.034 * Math.cos((p.lat * Math.PI) / 180)) / Math.pow(2, mapNav.getZoom());
+    if (!navPos || ll.distanceTo(navPos) > mpp) { mapNav.panTo(ll, { animate: false }); navPos = ll; }
   }
   $('tlabel').textContent = `${fmt(S - winS0)} / ${fmt(winS1 - winS0)}   ${new Date(utc * 1000).toLocaleTimeString('ja-JP')}`
     + (perf.fps ? `   [${perf.fps}fps 描画${perf.ms}ms]` : '');
