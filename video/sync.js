@@ -125,16 +125,25 @@ export function parseNmea(text) {
       if (p[1] && p[6] !== '0') alt.set(p[1], { alt: isFinite(a) ? a : null, ns: +p[7], hdop: parseFloat(p[8]) });
     } else if (tag === '$GPRMC') {
       if (!nmeaChecksumOk(line)) continue;
-      if (p.length < 10 || p[2] !== 'A' || !p[1] || p[9].length !== 6) continue;
+      if (p.length < 10 || !p[1] || p[9].length !== 6) continue;
       const hh = +p[1].slice(0, 2), mm = +p[1].slice(2, 4), ss = parseFloat(p[1].slice(4));
       const dd = +p[9].slice(0, 2), mo = +p[9].slice(2, 4), yy = +p[9].slice(4, 6);
       if (!isFinite(hh) || !isFinite(dd)) continue;
       const t = Date.UTC(2000 + yy, mo - 1, dd, hh, mm, 0) / 1000 + ss;
-      const lat = dmToDeg(p[3], p[4]), lon = dmToDeg(p[5], p[6]);
-      if (!isFinite(lat) || !isFinite(lon)) continue;
-      if (!seen.has(t)) {
-        seen.add(t);
-        fixes.push({ t, lat, lon, spd: (parseFloat(p[7]) || 0) * 1.852, ele: null, ns: null, hdop: null, _tk: p[1] }); // knot → km/h
+      /*
+       * **status=V（測位無効）でも時刻の基準としては使う。**
+       * 受信機は位置を失っても GPS 時刻は保持しており、$GPRMC の時刻・日付は埋まっている。
+       * $GSENS は時刻を持たず前後の測位センテンスの間を等分して時刻を割り当てるので、
+       * 有効測位だけを基準にすると**トンネル内で基準が1つも無くなり IMU が全部落ちる**
+       * （実測: 関越トンネル内のクリップで $GSENS 1190〜1210 行に対し gsens 0件）。
+       * 位置が要る fixes には積まず、時刻の基準としてだけ使う。
+       */
+      if (p[2] === 'A') {
+        const lat = dmToDeg(p[3], p[4]), lon = dmToDeg(p[5], p[6]);
+        if (isFinite(lat) && isFinite(lon) && !seen.has(t)) {
+          seen.add(t);
+          fixes.push({ t, lat, lon, spd: (parseFloat(p[7]) || 0) * 1.852, ele: null, ns: null, hdop: null, _tk: p[1] }); // knot → km/h
+        }
       }
       gsensRaw.push({ mark: t });
     } else if (tag === '$GSENS') {
