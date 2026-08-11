@@ -74,8 +74,6 @@
   <div class="drop">
     <label>OBD フレームログ (.txt)</label>
     <input type="file" id="fTxt" accept=".txt">
-    <label>GPX（省略可。無ければドラレコの NMEA を使う）</label>
-    <input type="file" id="fGpx" accept=".gpx">
     <label>ドラレコ（SDカードのフォルダ）</label>
     <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
       <button id="pickDir">フォルダを選択</button>
@@ -144,7 +142,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="lib/flow.js"></script>
 <script type="module">
-import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, haversineMeters, fillTrackGaps } from './video/sync.js';
+import { parseNmea, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, haversineMeters, fillTrackGaps } from './video/sync.js';
 import { drawGraph } from './lib/graph.js';
 import { TileCache, makeView, fitView, zoomForSpan, drawTiles, drawRoute, drawDot, visibleRange, TILE_STYLES, drawAttribution } from './video/tilemap.js';
 
@@ -181,7 +179,7 @@ function collectFromInput(files) {
 }
 
 // ─────────────────────────────── 読み込み → 同期
-async function load(entries, txtFile, gpxFile) {
+async function load(entries, txtFile) {
   const T0 = performance.now(); const lap = [];
   const mark = (name) => { lap.push(`${name} ${((performance.now() - T0) / 1000).toFixed(1)}s`); };
   const ext = (p) => (p.split('.').pop() || '').toLowerCase();
@@ -276,12 +274,10 @@ async function load(entries, txtFile, gpxFile) {
   if (!clips.length) throw new Error('OBD ログの時間帯に一致するクリップが無い');
 
   mark(`全文解析(${clips.length}本採用)`);
-  msg('GPX を解析中…');
-  const gpx = gpxFile ? parseGpx(await gpxFile.text()) : null;
-  mark('GPX');
-
   msg('時刻同期を計算中…');
-  MAN = buildManifest({ clips, obd, gpx });
+  // GPX は渡さない。マップ・標高は NMEA 固定で、GPX を使う経路が無いため。
+  // 時刻合わせの独立検証（δ_obd と δ_gpx の突き合わせ）は build-sync.mjs --gpx で行う。
+  MAN = buildManifest({ clips, obd, gpx: null });
   TL = makeTimeline(MAN);
   mark('同期計算');
   deriveTelemetry(obd);
@@ -295,7 +291,7 @@ async function load(entries, txtFile, gpxFile) {
   }
   clipOrder = MAN.session.clips.filter((c) => CLIPS.has(c.name)).map((c) => c.name);
 
-  // マップ用トラック: 常に NMEA（GPX は検証専用。理由は sync.js の mapSource 参照）
+  // マップ用トラック: 常に NMEA（理由は sync.js の mapSource 参照）
   TRACK = clips.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t);
 
   /*
@@ -984,7 +980,7 @@ $('goBtn').onclick = async () => {
     }
     if (!entries.length) return msg('ドラレコのフォルダ、または MP4+NMEA を選んでください');
     $('goBtn').disabled = true;
-    const m = await load(entries, txt, $('fGpx').files[0] || null);
+    const m = await load(entries, txt);
     $('loader').style.display = 'none'; $('app').classList.add('on');
     fitStage(); buildMaps();
     V.push($('vA'), $('vB')); VR.push($('vRA'), $('vRB'));

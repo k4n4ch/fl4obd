@@ -684,12 +684,24 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
 
   const warnings = [...notes];
   if (!dObd.ok) warnings.push(`OBD↔NMEA オフセットが解けない（${dObd.reason}）。同期は信頼できない。`);
-  if (gpx && gpx.length > 20 && !dGpx.ok) warnings.push('GPX↔NMEA オフセットが解けない。マップは NMEA を使用する。');
+  if (gpx && gpx.length > 20 && !dGpx.ok) warnings.push('GPX↔NMEA オフセットが解けない。');
   if (prof.cVideoSource.startsWith('default')) warnings.push('cVideo が未校正（既定0、±0.6s）。GPS同期時計の撮影で確定できる。');
   const info = [];
   if (dropped.length) info.push(`時間重複で除外したクリップ ${dropped.length}本（多チャンネル/複製）。`);
   if (sessions.length > 1) info.push(`セッション ${sessions.length}件を検出し、OBD区間と最も重なる1件を採用した。`);
   if (anchor.noFix.length) info.push(`測位の無いクリップ ${anchor.noFix.length}本（トンネル等）を尺で配置した。`);
+  /*
+   * δ_obd と δ_gpx の突き合わせ。OBDログと GPX は同じスマホの同じ時計で記録されるので
+   * 両者は一致するはず。δ_obd は車速（微分を経由）、δ_gpx は位置（微分なし）から独立に
+   * 解いているため、一致すれば δ_obd が正しいことの独立な裏取りになる。
+   * δ_obd は表示・グラフ・途絶補完の全てが依存する最重要パラメータなので、ここが
+   * 食い違うなら他を疑う前にまずこれを疑う。実測は 0.01s / 0.10s（2セッション）。
+   */
+  if (dObd.ok && dGpx.ok) {
+    const gap = Math.abs(dObd.delta - dGpx.delta);
+    if (gap > 0.5) warnings.push(`時刻合わせが2経路で食い違う（車速由来 ${dObd.delta.toFixed(2)}s / 位置由来 ${dGpx.delta.toFixed(2)}s、差 ${gap.toFixed(2)}s）。同期が信頼できない。`);
+    else info.push(`時刻合わせを GPX で独立検証（車速由来と位置由来の差 ${gap.toFixed(2)}s）。`);
+  }
   if (anchor.excluded.length) warnings.push(`アンカーから除外: ${anchor.excluded.slice(0, 5).map((e) => e.name).join(', ')}${anchor.excluded.length > 5 ? ` 他${anchor.excluded.length - 5}本` : ''}`);
   if (Math.abs(obdShift) > 60) warnings.push(`スマホ時計オフセットが異常に大きい（${obdShift.toFixed(1)}s）。要確認。`);
   if (!(end > start)) warnings.push('映像・NMEA・OBD の共通区間が存在しない。');
