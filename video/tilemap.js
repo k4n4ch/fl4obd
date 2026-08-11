@@ -115,29 +115,37 @@ export async function drawTiles(ctx, cache, view, ox = 0, oy = 0) {
   }
 }
 
-/**
- * ルートを描く。replay/video の表現に合わせ「白フチ → モード色・車速線幅」の2度塗り。
+/*
+ * ルートを描く。「白フチ → 本線」の2度塗り。
  * from/to で描画するインデックス範囲を絞れる（ナビ表示で全点を毎フレーム描かないため）。
+ * 区間ごとの見た目は styleOf(i) → {col, w, dash} で決める。
+ * dash を返した区間は破線で描き、白フチも付けない（推定・補完区間を実測と区別する用）。
+ * colorOf/widthOf は従来の呼び出し方（meta[i].mode / meta[i].spd から決める）を残したもの。
  */
-export function drawRoute(ctx, track, meta, view, ox = 0, oy = 0, { colorOf, widthOf, from = 0, to = -1 } = {}) {
+export function drawRoute(ctx, track, meta, view, ox = 0, oy = 0, { colorOf, widthOf, styleOf, from = 0, to = -1 } = {}) {
   if (to < 0) to = track.length - 1;
+  const style = styleOf || ((i) => ({ col: colorOf(meta[i].mode), w: widthOf(meta[i].spd), dash: null }));
   const runs = [];
   let cur = null;
   for (let i = from; i <= to; i++) {
-    const col = colorOf(meta[i].mode), wd = widthOf(meta[i].spd);
+    const { col, w: wd, dash = null } = style(i);
     const p = view.px(track[i].lat, track[i].lon);
-    if (!cur || cur.col !== col || cur.w !== wd) { if (cur) cur.pts.push(p); cur = { col, w: wd, pts: [p] }; runs.push(cur); }
-    else cur.pts.push(p);
+    if (!cur || cur.col !== col || cur.w !== wd || cur.dash !== dash) {
+      if (cur) cur.pts.push(p);
+      cur = { col, w: wd, dash, pts: [p] }; runs.push(cur);
+    } else cur.pts.push(p);
   }
-  const stroke = (r, col, wd) => {
+  const stroke = (r, col, wd, dash) => {
+    ctx.setLineDash(dash || []);
     ctx.beginPath();
     ctx.moveTo(ox + r.pts[0][0], oy + r.pts[0][1]);
     for (let i = 1; i < r.pts.length; i++) ctx.lineTo(ox + r.pts[i][0], oy + r.pts[i][1]);
     ctx.strokeStyle = col; ctx.lineWidth = wd; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke();
   };
   ctx.save();
-  ctx.globalAlpha = 0.85; for (const r of runs) stroke(r, '#f4f8ff', r.w + 3);
-  ctx.globalAlpha = 1;    for (const r of runs) stroke(r, r.col, r.w);
+  ctx.globalAlpha = 0.85; for (const r of runs) if (!r.dash) stroke(r, '#f4f8ff', r.w + 3, null);
+  for (const r of runs) { ctx.globalAlpha = r.dash ? 0.75 : 1; stroke(r, r.col, r.w, r.dash); }
+  ctx.setLineDash([]);
   ctx.restore();
 }
 

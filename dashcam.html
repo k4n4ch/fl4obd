@@ -69,6 +69,12 @@
   #tlabel { margin-left:auto; color:#8ab; font-variant-numeric:tabular-nums; }
   #warn { color:#c85; font-size:10px; flex:1 1 100%; white-space:pre-wrap; }
   .leaflet-container { background:#0d1218; }
+  /* ── 書き出しパネル（ステージ外・出力に映らない） ── */
+  #expPanel { display:none; position:fixed; inset:0; background:#000c; z-index:2000; align-items:center; justify-content:center; }
+  #expPanel.on { display:flex; }
+  #expCard { background:#0d1520; border:1px solid #2a5a8c; border-radius:8px; padding:16px 20px; width:min(560px,92vw); max-height:88vh; overflow:auto; }
+  #expCard label { display:block; margin:8px 0 2px; color:#8ab; font-size:11px; }
+  #expCard input[type=text], #expCard select { width:100%; padding:5px 7px; background:#0a1018; border:1px solid #1a3a5a; color:#cfe; border-radius:4px; }
   /* 地図の帰属表示。地図画像を含む成果物を出す以上、再生でも書き出しでも必ず出す */
   .attrib { position:absolute; right:6px; bottom:5px; z-index:500; background:#0009; padding:1px 5px;
             border-radius:3px; color:#9ab; font-size:11px; pointer-events:none; white-space:nowrap; }
@@ -114,9 +120,35 @@
     <span class="spd" data-s="4">4x</span>
     <span class="spd on" id="rearBtn">リア</span>
     <select id="tileStyle" class="spd" style="color:#5a8"></select>
+    <span class="spd" id="expBtn">⤓ 書き出し</span>
     <span class="spd" id="dlSync">⤓ sync.json</span>
     <span id="tlabel">--:-- / --:--</span>
     <div id="warn"></div>
+  </div>
+  <div id="expPanel">
+    <div id="expCard">
+      <h3 style="margin:0 0 8px; color:#4a9eff; font-size:14px">オーバーレイ書き出し</h3>
+      <div style="color:#8ab; margin-bottom:8px; font-size:11px">地図とグラフを 1 本のファイルに書き出す。映像との合成はローカルの ffmpeg 1 コマンドで行う。</div>
+      <label>オーバーレイ fps</label>
+      <select id="expFps"><option value="10" selected>10 (推奨)</option><option value="5">5 (容量半分)</option><option value="15">15</option></select>
+      <label>JPEG 品質 <span id="expQv">82</span></label>
+      <input type="range" id="expQ" min="60" max="95" value="82" style="width:100%">
+      <label>ドラレコ SD の絶対パス（concat リスト生成用）</label>
+      <input type="text" id="expRoot" placeholder="例) macOS: /Volumes/NO NAME  /  Windows: E:\">
+      <label>出力先フォルダ</label>
+      <div style="display:flex; gap:8px; align-items:center; margin:4px 0 8px">
+        <button id="expPick">フォルダを選択</button><span id="expDir" style="color:#8ab"></span>
+      </div>
+      <div id="expStat" style="color:#5a8; min-height:40px; white-space:pre-wrap; font-variant-numeric:tabular-nums; font-size:11px"></div>
+      <div style="display:flex; gap:8px; margin-top:6px">
+        <button id="expGo">開始</button><button id="expStop">中止</button><button id="expClose">閉じる</button>
+      </div>
+    </div>
+  </div>
+  <!-- 書き出し用。SVG 本体には style を付けない（クローンに position:absolute が残ると
+       単体画像として描画したとき root ごと画面外に飛び、完全に空白になる） -->
+  <div style="position:absolute; left:-9999px; top:0; width:1920px; height:1080px">
+    <svg id="expGraph" viewBox="0 0 1280 360" width="1280" height="360"></svg>
   </div>
 </div>
 
@@ -124,7 +156,7 @@
 <script type="module">
 import { parseNmea, parseMp4Meta, buildManifest, makeTimeline, haversineMeters, speedFromPositions, fillTrackGaps } from './video/sync.js';
 import { drawGraph } from './lib/graph.js';
-import { TILE_STYLES } from './video/tilemap.js';   // 他は書き出し（canvas 描画）用だったので不要
+import { TileCache, makeView, fitView, zoomForSpan, drawTiles, drawRoute, drawDot, visibleRange, TILE_STYLES, drawAttribution } from './video/tilemap.js';
 
 const $ = (id) => document.getElementById(id);
 const msg = (s) => { $('msg').textContent = s; };
@@ -749,6 +781,231 @@ for (const el of document.querySelectorAll('.spd[data-s]')) el.onclick = () => {
   document.querySelectorAll('.spd[data-s]').forEach((x) => x.classList.remove('on'));
   el.classList.add('on'); rate = +el.dataset.s; for (const v of [...V, ...VR]) v.playbackRate = rate;
 };
+
+// ─────────────────────────────── 書き出し（地図とグラフを1本の動画に）
+/*
+ * 書き出しキャンバスは表示と同じ 1920×1080。映像セル（前方/リア）は黒のままにして
+ * ffmpeg が上に重ねる。H.264 なので黒面はほぼ容量を食わず、crop を挟まないぶん
+ * 合成コマンドが単純になる（レイアウト変更にも追随しやすい）。
+ * オーバーレイに載るのは ナビ / 俯瞰 / グラフ の3つだけ。
+ */
+const EXP = { W: 1920, H: 1080, dir: null, stop: false, running: false };
+const CELL = { video: [0, 0, 1280, 720], rear: [1280, 0, 640, 360],
+               nav: [1280, 360, 640, 360], ov: [1280, 720, 640, 360],
+               graph: [0, 720, 1280, 360] };
+
+function svgDataUrl(svgEl, w, h) {
+  const c = svgEl.cloneNode(true);
+  // 単体画像として描画するので、位置指定は必ず落とす（position:absolute が残ると全面空白になる）
+  c.removeAttribute('style');
+  c.removeAttribute('class');
+  c.setAttribute('width', w); c.setAttribute('height', h);
+  c.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(c));
+}
+/** グラフを画像化。毎フレーム流れるのでキャッシュは効かない */
+async function graphImageFor(utc) {
+  if (!GPANELS) return null;
+  drawGraph($('expGraph'), GPANELS, utc, GRAPH_SPAN, CELL.graph[2], CELL.graph[3]);
+  const img = new Image();
+  img.src = svgDataUrl($('expGraph'), CELL.graph[2], CELL.graph[3]);
+  await img.decode();
+  return img;
+}
+function ffmpegCommand(fps, ovIn, ovNote) {
+  const w0 = (S) => S.toFixed(3);
+  /*
+   * filter_complex は1本の引数。改行を入れない（Windows の cmd/PowerShell では行継続記号が
+   * 異なるため、1行にしておくのが Win/Mac 共通で唯一安全な形）。
+   * オーバーレイ自体が 1920×1080 の下地なので、映像2本を所定位置に重ねるだけで済む。
+   */
+  const [vx, vy, vw, vh] = CELL.video, [rx, ry, rw, rh] = CELL.rear;
+  const fc = [
+    `[0:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${vw}:${vh},fps=30[f]`,
+    `[1:v]trim=start=${w0(winS0)}:end=${w0(winS1)},setpts=PTS-STARTPTS,scale=${rw}:${rh},fps=30[r]`,
+    '[2:v]fps=30[t]',
+    `[t][f]overlay=${vx}:${vy}:shortest=1[a]`,
+    `[a][r]overlay=${rx}:${ry}:shortest=1[v]`,
+  ].join(';');
+  // -nostdin は必須。付けないと、この後に続く行を ffmpeg が対話コマンドとして読み取ってしまう。
+  const cmd = `ffmpeg -nostdin -hide_banner -f concat -safe 0 -i concat_front.txt -f concat -safe 0 -i concat_rear.txt `
+    + `${ovIn} -filter_complex "${fc}" -map "[v]" `
+    + `-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -r 30 -an -movflags +faststart out.mp4`;
+  return [
+    '# ドラレコ走行ビューア 書き出し',
+    `# オーバーレイ: ${ovNote}  ${fps}fps`,
+    '# このフォルダで下の1行を実行する（Windows は cmd / PowerShell どちらでも可）',
+    '', cmd, '',
+  ].join('\n');
+}
+async function makeEncoder(fps, onChunk) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  const cands = ['avc1.4D0033', 'avc1.640033', 'avc1.42E033', 'avc1.4D401F', 'avc1.42E01E'];
+  for (const codec of cands) {
+    const cfg = { codec, width: EXP.W, height: EXP.H, framerate: fps, bitrate: 6e6,
+                  avc: { format: 'annexb' }, latencyMode: 'quality' };
+    try {
+      const sup = await VideoEncoder.isConfigSupported(cfg);
+      if (!sup || !sup.supported) continue;
+      const enc = new VideoEncoder({
+        output: (chunk) => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); onChunk(b); },
+        error: (e) => { console.error('VideoEncoder', e); },
+      });
+      enc.configure(sup.config || cfg);
+      return { enc, codec };
+    } catch (e) { /* 次の候補へ */ }
+  }
+  return null;
+}
+async function writeText(dir, name, text) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable(); await w.write(new Blob([text])); await w.close();
+}
+
+async function runExport() {
+  const fps = +$('expFps').value, quality = +$('expQ').value / 100, root = $('expRoot').value.trim();
+  if (!EXP.dir) return ($('expStat').textContent = '出力先フォルダを選んでください');
+  if (!root) return ($('expStat').textContent = 'ドラレコ SD の絶対パスを入力してください（concat リスト生成に必要）');
+  localStorage.setItem(ROOT_KEY, root);
+  EXP.stop = false; EXP.running = true;
+  const wasPlaying = playing; setPlay(false);
+  const sep = root.includes('\\') ? '\\' : '/';
+  const join = (a, b) => a.replace(/[\/\\]+$/, '') + sep + b.split('/').join(sep);
+
+  // concat リスト（セッションのクリップのみ・絶対パス）
+  const fl = [], rl = [];
+  for (const n of clipOrder) {
+    const c = CLIPS.get(n);
+    fl.push(`file '${join(root, c.path)}'`);
+    rl.push(`file '${join(root, c.rearPath || c.path)}'`);
+  }
+  await writeText(EXP.dir, 'concat_front.txt', fl.join('\n') + '\n');
+  await writeText(EXP.dir, 'concat_rear.txt', rl.join('\n') + '\n');
+  await writeText(EXP.dir, 'sync.json', JSON.stringify(MAN, null, 2));
+
+  let wq = Promise.resolve(), bytes = 0;
+  const chunkOut = (b) => { bytes += b.length; wq = wq.then(() => ws.write(b)); };
+  const E = await makeEncoder(fps, chunkOut);
+  const ovName = E ? 'overlay.h264' : 'overlay.mjpeg';
+  const fh0 = await EXP.dir.getFileHandle(ovName, { create: true });
+  const ws = await fh0.createWritable();
+  const ovIn = E ? `-f h264 -framerate ${fps} -i overlay.h264` : `-f mjpeg -framerate ${fps} -i overlay.mjpeg`;
+  const ovNote = E ? `overlay.h264（生H.264 Annex-B / ${E.codec}）` : 'overlay.mjpeg（MJPEG）';
+  await writeText(EXP.dir, 'compose.txt', ffmpegCommand(fps, ovIn, ovNote));
+
+  const cv = new OffscreenCanvas(EXP.W, EXP.H), ctx = cv.getContext('2d');
+  const cache = new TileCache(TILE_STYLES[tileStyle].url);
+  const attrib = TILE_STYLES[tileStyle].attrib;
+  // 経路の見た目は再生画面と同じ規則（車速の色分け・補完区間は破線）
+  const styleOf = (i) => ({ col: spdColor(TMETA[i].spd), w: spdWeight(TMETA[i].spd),
+                            dash: TRACK[i].estimated ? [6, 5] : null });
+
+  /*
+   * マップの縮尺は「書き出しボタンを押した時点の再生アプリの表示状態」に固定する。
+   * 再生アプリのマップセルは 640×360 で書き出しキャンバスと同寸（CSS の transform は
+   * clientWidth を変えない）ため、ズーム値をそのまま流用できる。
+   * 自前のタイル描画は整数ズームのみ対応なので丸める。
+   */
+  const ovZ = mapOv ? Math.round(mapOv.getZoom()) : null;
+  const ovC = mapOv ? mapOv.getCenter() : null;
+  const [ovX, ovY, ovW, ovH] = CELL.ov;
+  const ovFit = (ovZ != null && ovC) ? { z: ovZ, lat: ovC.lat, lon: ovC.lng } : fitView(TRACK, ovW, ovH);
+  // 俯瞰は自車以外が静的 → 一度だけ描いて毎フレーム転写する
+  const ovView = makeView(ovFit.lat, ovFit.lon, ovFit.z, ovW, ovH);
+  const ovBase = new OffscreenCanvas(ovW, ovH), octx = ovBase.getContext('2d');
+  octx.fillStyle = '#0d1218'; octx.fillRect(0, 0, ovW, ovH);
+  await drawTiles(octx, cache, ovView, 0, 0);
+  drawRoute(octx, TRACK, TMETA, ovView, 0, 0, { styleOf });
+  drawDot(octx, ovView, TRACK[0].lat, TRACK[0].lon, 0, 0, { r: 5, fill: '#2ecc71', ring: '#2ecc71', rw: 1 });
+  drawDot(octx, ovView, TRACK[TRACK.length - 1].lat, TRACK[TRACK.length - 1].lon, 0, 0, { r: 5, fill: '#e74c3c', ring: '#e74c3c', rw: 1 });
+  drawAttribution(octx, attrib, 0, 0, ovW, ovH);
+  const [nvX, nvY, nvW, nvH] = CELL.nav;
+  const navZ = mapNav ? Math.round(mapNav.getZoom()) : zoomForSpan(FOLLOW_SPAN_M, Math.min(nvW, nvH), TRACK[0].lat);
+
+  $('expStat').textContent = `縮尺を固定: ナビ z${navZ} / 俯瞰 z${ovFit.z}（押した時点の表示状態）\n準備中…`;
+  const total = Math.ceil((winS1 - winS0) * fps);
+  const t0 = performance.now();
+  for (let k = 0; k < total; k++) {
+    if (EXP.stop) break;
+    const Sk = winS0 + k / fps;
+    const utc = TL.sToUtc(Sk);
+    const p = trackAt(utc);
+    ctx.fillStyle = '#0a1520'; ctx.fillRect(0, 0, EXP.W, EXP.H);
+    ctx.fillStyle = '#000';                              // 映像セルは黒（ffmpeg が上に重ねる）
+    ctx.fillRect(...CELL.video); ctx.fillRect(...CELL.rear);
+    const gim = await graphImageFor(utc);
+    if (gim) ctx.drawImage(gim, CELL.graph[0], CELL.graph[1]);
+    ctx.drawImage(ovBase, ovX, ovY);
+    if (p) drawDot(ctx, ovView, p.lat, p.lon, ovX, ovY);
+    if (p) {
+      const nv = makeView(p.lat, p.lon, navZ, nvW, nvH);
+      ctx.save(); ctx.beginPath(); ctx.rect(nvX, nvY, nvW, nvH); ctx.clip();
+      ctx.fillStyle = '#0d1218'; ctx.fillRect(nvX, nvY, nvW, nvH);
+      await drawTiles(ctx, cache, nv, nvX, nvY);
+      const [a, b] = visibleRange(TRACK, nv, p.i);
+      drawRoute(ctx, TRACK, TMETA, nv, nvX, nvY, { styleOf, from: a, to: b });
+      drawDot(ctx, nv, p.lat, p.lon, nvX, nvY);
+      drawAttribution(ctx, attrib, nvX, nvY, nvW, nvH);
+      ctx.restore();
+    }
+    if (E) {
+      const vf = new VideoFrame(cv, { timestamp: Math.round((k / fps) * 1e6), duration: Math.round(1e6 / fps) });
+      E.enc.encode(vf, { keyFrame: k % (fps * 2) === 0 });
+      vf.close();
+      while (E.enc.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 0));   // バックプレッシャ
+    } else {
+      chunkOut(new Uint8Array(await (await cv.convertToBlob({ type: 'image/jpeg', quality })).arrayBuffer()));
+    }
+    if (k % 10 === 0 || k === total - 1) {
+      const el = (performance.now() - t0) / 1000, rate = (k + 1) / el;
+      $('expStat').textContent =
+        `ナビ z${navZ} / 俯瞰 z${ovFit.z}   ${ovName}\n${k + 1} / ${total} フレーム (${(((k + 1) / total) * 100).toFixed(1)}%)  ${rate.toFixed(1)} fps\n`
+        + `経過 ${(el / 60).toFixed(1)}分  残り ${(((total - k - 1) / rate) / 60).toFixed(1)}分  `
+        + `書き込み ${(bytes / 1e6).toFixed(0)} MB (推定合計 ${((bytes / (k + 1)) * total / 1e6).toFixed(0)} MB)\n`
+        + `タイル取得 ${cache.miss} / キャッシュヒット ${cache.hits}`;
+      await new Promise((r) => setTimeout(r, 0));   // UI に制御を返す
+    }
+  }
+  if (E) { await E.enc.flush(); E.enc.close(); }
+  await wq; await ws.close();
+  EXP.running = false;
+  $('expStat').textContent += EXP.stop
+    ? `\n中止した（${ovName} はここまでの分が残る）`
+    : `\n完了 → ${ovName} (${(bytes / 1e6).toFixed(0)} MB)。compose.txt の ffmpeg コマンドを実行して合成する。`;
+  if (wasPlaying) setPlay(true);
+}
+
+/*
+ * SD の絶対パスは File System Access API から取得できない（handle は .name のみ）。
+ * そのため「前回入力値を記憶」＋「フォルダ名からの推定」で自動補完する。
+ * macOS のリムーバブルは /Volumes/<名前> に必ずマウントされるので推定が確実に効く。
+ */
+const ROOT_KEY = 'dashcam.sdroot';
+function guessSdRoot() {
+  const saved = localStorage.getItem(ROOT_KEY);
+  if (saved && (!dirLabel || saved.replace(/[\/\\]+$/, '').endsWith(dirLabel))) return saved;
+  const mac = /Mac/i.test(navigator.userAgent) || /Mac/i.test(navigator.platform || '');
+  if (dirLabel && mac) return '/Volumes/' + dirLabel;
+  return saved || '';
+}
+$('expBtn').onclick = () => {
+  $('expPanel').classList.add('on');
+  if (!$('expRoot').value) {
+    const g = guessSdRoot();
+    if (g) { $('expRoot').value = g; $('expStat').textContent = `SD の絶対パスを自動入力した（${g}）。違う場合は書き換える。`; }
+  }
+};
+$('expClose').onclick = () => { $('expPanel').classList.remove('on'); };
+$('expStop').onclick = () => { EXP.stop = true; };
+$('expQ').oninput = (e) => { $('expQv').textContent = e.target.value; };
+$('expPick').onclick = async () => {
+  try {
+    EXP.dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+    $('expDir').textContent = EXP.dir.name;
+  } catch (e) { if (e.name !== 'AbortError') $('expStat').textContent = 'フォルダ選択に失敗: ' + e.message; }
+};
+$('expGo').onclick = () => { if (!EXP.running) runExport().catch((e) => { EXP.running = false; $('expStat').textContent = '失敗: ' + e.message; console.error(e); }); };
+
 $('dlSync').onclick = () => {
   const b = new Blob([JSON.stringify(MAN, null, 2)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'sync.json'; a.click();
