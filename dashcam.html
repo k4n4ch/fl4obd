@@ -649,10 +649,19 @@ async function startLoad(sess) {
     $('loader').style.display = 'none'; $('app').classList.add('on');
     fitStage(); buildMaps();
     V.push($('vA'), $('vB')); VR.push($('vRA'), $('vRB'));
-    const w = [...m.warnings];
-    if (m.timing) w.push('読込内訳: ' + m.timing.join(' / '));
-    if (m.info.length) w.push(...m.info);
-    $('warn').textContent = w.join('  /  ');
+    /*
+     * 画面には「読む人が対処できること」だけ出す。
+     * アンカーの外れ値・重複除去の内訳・セッション数といった内部診断は
+     * 開発時にしか意味が無いので console に回す（sync.json にも全部入っている）。
+     */
+    console.log('[同期]', m);
+    const notes = [];
+    if (m.data.nFixes === 0) notes.push('測位データが無いため地図と標高は出ません');
+    if (!(m.window.durationSec > 0)) notes.push('映像と測位の重なりがありません');
+    const est = TRACK.filter((p) => p.estimated).length;
+    const gaps = (() => { let n = 0; for (let i = 1; i < TRACK.length; i++) if (TRACK[i].t - TRACK[i - 1].t > 10) n++; return n; })();
+    if (gaps) notes.push(`測位が途切れた区間が ${gaps} 箇所あります（トンネル等。地図の線はそこで切れます）`);
+    $('warn').textContent = notes.join('  /  ');
     await seekTo(winS0, false);
     tick();
   } catch (e) {

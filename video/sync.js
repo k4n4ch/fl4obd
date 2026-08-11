@@ -714,7 +714,9 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   if (prof.cVideoSource.startsWith('default')) warnings.push('cVideo が未校正（既定0、±0.6s）。GPS同期時計の撮影で確定できる。');
   const info = [];
   if (dropped.length) info.push(`時間重複で除外したクリップ ${dropped.length}本（多チャンネル/複製）。`);
-  if (sessions.length > 1) info.push(`セッション ${sessions.length}件を検出し、OBD区間と最も重なる1件を採用した。`);
+  if (sessions.length > 1) info.push(hasObd
+    ? `セッション ${sessions.length}件を検出し、OBD区間と最も重なる1件を採用した。`
+    : `セッション ${sessions.length}件を検出し、最も長い1件を採用した。`);
   if (anchor.noFix.length) info.push(`測位の無いクリップ ${anchor.noFix.length}本（トンネル等）を尺で配置した。`);
   /*
    * δ_obd と δ_gpx の突き合わせ。OBDログと GPX は同じスマホの同じ時計で記録されるので
