@@ -628,7 +628,23 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   const dObd = estimateOffset(obdSpeed, refSpeed, { moveThreshold: 5 });
 
   let dGpx = { ok: false, reason: 'GPXなし', delta: NaN, residual: NaN, n: 0 };
-  let mapSource = 'nmea';
+  /*
+   * マップ・標高は常に NMEA を使う。GPX は検証専用。
+   *
+   * このアプリはドラレコ映像がある区間しか出力せず、NMEA の無いクリップは
+   * そもそも採用しないので、「NMEA が無くて GPX に助けられる」状況が構造的に無い。
+   * そのうえで実測（2026-08-10, 133分・約7400点ずつ）では:
+   *   位置差分速度 vs OBD  NMEA 中央0.5/95%1.6 km/h   GPX 中央0.4/95%1.4 km/h
+   *   走行中の座標凍結     NMEA 0/6918 (0%)          GPX 52/7052 (0.7%)
+   *   標高の垂直速度 sd    NMEA 0.58 m/s             GPX 0.78 m/s
+   *   標高レンジ           NMEA 38〜680m             GPX 72〜724m
+   * 位置精度は同等（むしろ GPX がわずかに良い）が、GPX は測位を失うと座標を凍結し、
+   * 標高は約40m高い＝ジオイド補正されていない疑いが濃い（日本のジオイド高と一致）。
+   * NMEA は品質指標(衛星数/HDOP)が付き、映像と同一受信機なので時刻オフセットの
+   * 推定も1つ減る。よって既定を NMEA に固定した。
+   * dGpx は引き続き計算する。位置同士の照合残差は時刻合わせが正しいことの独立な裏取りになる。
+   */
+  const mapSource = 'nmea';
   if (gpx && gpx.length > 20) {
     // 位置同士で照合（微分を挟まないため最も素性が良い）
     const rt = sessFixes.map((f) => f.t);
@@ -654,7 +670,7 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
       const contrast = worst.c > 0 ? (worst.c - best.c) / worst.c : 0;
       dGpx = { ok: contrast >= 0.3, delta: best.d, residual: best.c, n: best.n, contrast, unit: 'm', reason: contrast >= 0.3 ? null : '谷が平坦' };
     }
-    if (dGpx.ok) mapSource = 'gpx';
+    // dGpx.ok でも mapSource は切り替えない（上記コメント参照）。GPX は検証専用。
   }
 
   const videoStart = anchor.A + prof.cVideo;

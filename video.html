@@ -295,18 +295,13 @@ async function load(entries, txtFile, gpxFile) {
   }
   clipOrder = MAN.session.clips.filter((c) => CLIPS.has(c.name)).map((c) => c.name);
 
-  // マップ用トラック: GPX が使えるならそちら、無ければ NMEA
-  const dGpx = MAN.offsets.gpx.ok ? MAN.offsets.gpx.delta : 0;
-  const useGpx = MAN.data.mapSource === 'gpx' && gpx;
-  TRACK = useGpx
-    ? gpx.map((p) => ({ t: p.t + dGpx, lat: p.lat, lon: p.lon, ele: p.ele, estimated: false }))
-    : clips.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t);
+  // マップ用トラック: 常に NMEA（GPX は検証専用。理由は sync.js の mapSource 参照）
+  TRACK = clips.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t);
 
   /*
    * 測位途絶（トンネル等）を OBD の車速と道路形状で補完する。
    * 位置は経路長と車速積分の一致で裏付けが取れるが、標高は推定。表示で区別すること。
-   * NMEA には測位品質(衛星数/HDOP)が付くので端点判定に使える。GPX には無いので
-   * 滑らかさ判定だけに落ちる（trimAnchor が自動でそう振る舞う）。
+   * NMEA には測位品質(衛星数/HDOP)が付くので端点判定に使える。
    */
   FILLS = [];
   msg('測位途絶を補完中…');
