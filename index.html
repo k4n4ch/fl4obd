@@ -385,19 +385,34 @@ function startGps() {
 function stopGps() {
   if (gpsWatchId != null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
 }
+// 測位が途切れた区間（トンネル等）は <trkseg> を分ける。
+// 1本の trkseg に入れると地図側が穴を直線で結んでしまい、走っていない経路が描かれる。
+// 記録自体は途切れておらず、点は連続して溜まっている（途絶=区間の切れ目として表現するだけ）。
+const GPX_SEG_GAP = 10;   // 秒。これを超える間隔で区間を切る
+
 function exportGpx() {
   if (gpsBuffer.length === 0) return;
-  const pts = gpsBuffer.map(p => {
+  const segs = [];
+  let cur = [];
+  let prev = null;
+  for (const p of gpsBuffer) {
+    const t = Date.parse(p.time);
+    if (prev != null && (t - prev) / 1000 > GPX_SEG_GAP) { segs.push(cur); cur = []; }
+    cur.push(p);
+    prev = t;
+  }
+  if (cur.length) segs.push(cur);
+  const body = segs.map(seg => '<trkseg>\n' + seg.map(p => {
     let s = '<trkpt lat="' + p.lat.toFixed(7) + '" lon="' + p.lon.toFixed(7) + '">';
     if (p.ele != null) s += '<ele>' + p.ele.toFixed(1) + '</ele>';
     s += '<time>' + p.time + '</time></trkpt>';
     return s;
-  }).join('\n');
+  }).join('\n') + '\n</trkseg>').join('\n');
   const gpx =
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<gpx version="1.1" creator="fl4obd" xmlns="http://www.topografix.com/GPX/1/1">\n' +
-    '<trk><name>fl4obd ' + new Date().toISOString() + '</name><trkseg>\n' +
-    pts + '\n</trkseg></trk>\n</gpx>\n';
+    '<trk><name>fl4obd ' + new Date().toISOString() + '</name>\n' +
+    body + '\n</trk>\n</gpx>\n';
   const blob = new Blob([gpx], { type: 'application/gpx+xml' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -405,7 +420,7 @@ function exportGpx() {
   a.download = 'fl4obd_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.gpx';
   a.click();
   URL.revokeObjectURL(url);
-  log('GPX ' + gpsBuffer.length + ' pts 保存', 'ok');
+  log('GPX ' + gpsBuffer.length + ' pts / ' + segs.length + ' seg 保存', 'ok');
   gpsBuffer = [];
 }
 
@@ -908,7 +923,13 @@ function onRx(evt) {
   }
   rxBuf = parts[parts.length - 1];
   if (gotResponse) stallCount = 0;   // 応答が来た＝リンク生存
-  if (gotResponse && connected) sendNextPid();
+  if (gotResponse && connected) {
+    // 待っていない応答＝破棄済みの古い要求に対するもの。
+    // ここで次を撃つとポーリングチェーンが増殖するので、continue させない。
+    if (!awaiting) return;
+    awaiting = false;
+    sendNextPid();
+  }
 }
 // ─── Screen Wake Lock ────────────────────────────────────
 let wakeLock = null;
@@ -931,8 +952,12 @@ document.addEventListener('visibilitychange', () => {
   if (reconnecting || !connected) return;  // 再接続中/未接続はそれぞれの処理に委ねる
   // バックグラウンドでスロットルされ停止したポーリングを明示的に再始動。
   // リンクが実は切れていれば 無応答→ストール検出→forceReconnect が拾う。
+  // 在飛行の要求は破棄する。残したままだと復帰後にチェーンが2本になる
+  // （2026-08-09 トンネル通過時に発生。送信間隔 480→336ms、1行に応答2つ連結）。
   stallCount = 0;
   clearTimeout(pollWatchdog);
+  awaiting = false;
+  rxBuf = '';
   sendNextPid();
 });
 
@@ -943,6 +968,7 @@ let rxBuf = '', pollWatchdog = null, demoTimer = null;
 let userDisc = false;      // [切断する]ボタンによる手動切断か
 let reconnecting = false;  // 自動再接続ループ実行中ガード
 let stallCount = 0;        // 連続無応答回数
+let awaiting = false;      // ポーリング応答待ち中。同時に1要求だけを保証する
 const STALL_LIMIT = 5;     // これ以上(≒7.5s無応答)で能動的に再接続
 
 // 特定文字列を含むブロック（'>'区切り）が届くまで待つ
@@ -988,6 +1014,7 @@ function buildCmdQueue() {
 
 function sendNextPid() {
   if (!connected) return;
+  if (awaiting) return;      // 応答待ち中は撃たない（チェーンは常に1本）
   clearTimeout(pollWatchdog);
   const now = Date.now();
   let cmd;
@@ -999,7 +1026,8 @@ function sendNextPid() {
     if (wait > 0) { pollWatchdog = setTimeout(sendNextPid, wait); return; }
     cmd = CMD_2920; last2920 = now;
   }
-  try { sendRaw(cmd); } catch(e) { log('✗ send err: ' + e.message, 'e'); }
+  awaiting = true;
+  try { sendRaw(cmd); } catch(e) { awaiting = false; log('✗ send err: ' + e.message, 'e'); }
   // 無応答フォールバック(2920マルチフレームは重いので長め)
   pollWatchdog = setTimeout(onPollTimeout, 1500);
 }
@@ -1007,6 +1035,7 @@ function sendNextPid() {
 // 応答が1.5s来なかった時。連続 STALL_LIMIT 回で能動的に再接続
 function onPollTimeout() {
   if (!connected) return;
+  awaiting = false;          // 待ちを解除してから次を撃つ
   stallCount++;
   if (stallCount >= STALL_LIMIT) {
     log('無応答が続くため再接続します (' + stallCount + '連続)', 'e');
@@ -1154,6 +1183,7 @@ async function toggleConnect() {
     stopDemo(); // 接続開始時にデモ停止
 
     rxBuf = '';
+    awaiting = false;
     await initElm();
     connected = true;
     setUI('on');
@@ -1171,6 +1201,7 @@ async function toggleConnect() {
 function doDisc() {
   reconnecting = false;
   clearTimeout(pollWatchdog);
+  awaiting = false;
   releaseWakeLock();
   connected = false;
   if (bleDevice && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
@@ -1182,6 +1213,7 @@ function doDisc() {
 function forceReconnect() {
   if (reconnecting || userDisc) return;
   clearTimeout(pollWatchdog);
+  awaiting = false;
   connected = false;
   if (bleDevice && bleDevice.gatt.connected) {
     bleDevice.gatt.disconnect();          // → gattserverdisconnected → attemptReconnect
@@ -1197,6 +1229,7 @@ async function attemptReconnect() {
   reconnecting = true;
   connected = false;
   clearTimeout(pollWatchdog);
+  awaiting = false;
   releaseWakeLock();
   setUI('rec');
   let delay = 1000;
@@ -1206,7 +1239,7 @@ async function attemptReconnect() {
       const server = await bleDevice.gatt.connect();
       bleChar = await getBleChar(server);
       if (!bleChar) throw new Error('書き込みキャラクタリスティック未検出');
-      rxBuf = ''; stallCount = 0;
+      rxBuf = ''; stallCount = 0; awaiting = false;
       await initElm();
       if (userDisc) { doDisc(); return; }
       connected = true; reconnecting = false;
