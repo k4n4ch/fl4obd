@@ -30,6 +30,14 @@
   .drop label { display:block; margin:8px 0 2px; color:#8ab; }
   .drop input { width:100%; color:#cfe; }
   .drop .hint { color:#68a; font-size:10px; margin-top:2px; }
+  /* 走行の一覧。フォルダ内の全クリップを開始時刻で塊に分けたもの */
+  .sess { display:flex; align-items:baseline; gap:10px; width:100%; text-align:left;
+          padding:8px 12px; margin-bottom:4px; background:#0d1520; border:1px solid #1a3a5a;
+          border-radius:6px; color:#cfe; cursor:pointer; font-variant-numeric:tabular-nums; }
+  .sess:hover { background:#122840; border-color:#4a9eff; }
+  .sess .sd { color:#4a9eff; font-size:14px; }
+  .sess .sl { color:#cfe; }
+  .sess .sn { color:#6f8ba0; font-size:11px; margin-left:auto; }
   button { padding:9px 16px; background:#0d1e30; border:1px solid #2a5a8c; color:#cfe; border-radius:6px; cursor:pointer; }
   button:hover { background:#122840; border-color:#4a9eff; }
   button:disabled { opacity:.4; cursor:default; }
@@ -81,6 +89,10 @@
     <input type="file" id="fFiles" multiple accept=".mp4,.MP4,.nmea,.NMEA">
   </div>
   <button id="goBtn">読み込み</button>
+  <div id="sessWrap" style="display:none; width:100%; max-width:560px">
+    <div style="color:#8ab; margin:6px 0 4px">走行を選ぶ（時間が連続しているクリップをまとめてある）</div>
+    <div id="sessList"></div>
+  </div>
   <div id="msg"></div>
 </div>
 
@@ -121,7 +133,7 @@ const PRELOAD_SEC = 4;          // 次クリップの先読み開始（残り秒
 
 let MAN = null, TL = null, TRACK = [], CLIPS = new Map();   // name → {file, S0, duration}
 let clipOrder = [], winS0 = 0, winS1 = 0, S = 0, playing = false, rate = 1;
-let mapNav, mapOv, curNav, curOv, navPos = null, TMETA = [], GSNS = [], SPD = [], SESSIONS = [];
+let mapNav, mapOv, curNav, curOv, navPos = null, TMETA = [], GSNS = [], SPD = [];
 let lastHudKey = null, lastGraphUtc = -1e9, perf = { n: 0, sum: 0, t: 0 };   // 描画スロットリングと計測
 let rearOn = true;   // リア映像の有効/無効（720p を2本同時にデコードするコストの切り分け用にも使う）
 let act = 0;                                                          // 0=vA, 1=vB
@@ -145,10 +157,15 @@ function collectFromInput(files) {
   return [...files].map((f) => ({ name: f.name, path: f.webkitRelativePath || f.name, getFile: async () => f }));
 }
 
-// ─────────────────────────────── 読み込み → 同期
-async function load(entries) {
-  const T0 = performance.now(); const lap = [];
-  const mark = (name) => { lap.push(`${name} ${((performance.now() - T0) / 1000).toFixed(1)}s`); };
+/*
+ * 読み込みは2段階に分ける。
+ *  ① scanSessions … NMEA の先頭 4KB だけ読んで開始時刻を得て、走行の塊に分ける。
+ *  ② load          … 選ばれた走行のクリップだけを全文解析する。
+ * SD には数日分が入っているので、全 NMEA を全文解析すると数十MBが無駄になる
+ * （実測 215本/28MB に対し必要なのは29本）。①を先に見せて選ばせることで、
+ * 「どの走行か」をユーザーが決められるようにしつつ、②の対象は最小限に保つ。
+ */
+async function scanSessions(entries) {
   const ext = (p) => (p.split('.').pop() || '').toLowerCase();
   const mp4 = entries.filter((e) => ext(e.path) === 'mp4');
   const nme = entries.filter((e) => ext(e.path) === 'nmea');
@@ -175,12 +192,6 @@ async function load(entries) {
   }
   if (!byBase.size) throw new Error('MP4 と同名の NMEA が対応付かない');
 
-  /*
-   * 2パス構成。SD 全体には数日分のクリップが入っているので、全 NMEA を全文解析すると
-   * 数十MBの I/O と解析が無駄になる（実測 215本/28MB に対し必要なのは29本）。
-   * 1st: NMEA の先頭 4KB だけ読んで開始時刻を得て候補を絞る（ファイル名の書式に依存しない）。
-   * 2nd: 生き残りだけ全文解析 + MP4 メタ読み。I/O はバッチ並列化する。
-   */
   const BATCH = 8;
   const keys = [...byBase.keys()];
   const starts = new Map();
@@ -195,15 +206,11 @@ async function load(entries) {
     if (i % 64 === 0) msg(`クリップを絞り込み中… ${Math.min(i + BATCH, keys.length)}/${keys.length}`);
   }
   /*
-   * どの走行を見るかを開始時刻だけで決める。OBD ログのような外部の時間基準が無いので、
-   * 先頭 4KB から得た開始時刻を「15分以上空いたら別の走行」で塊に分け、最も長い塊を採る。
-   * 全文解析するのはその塊だけ。SD 全体を解析しない設計はそのまま保つ。
-   *
+   * 開始時刻を「15分以上空いたら別の走行」で塊に分ける。
    * 開始時刻が取れなかったものは「不明」として必ず候補に残す（落としてはいけない）。
    * 録画開始直後は GPS 未測位（$GPRMC の status=V）で先頭に有効 fix が無い場合があり、
    * 実測でも 188本中10本が該当した。
    */
-  const unknown = keys.filter((b) => !starts.has(b));
   const known = [...starts.entries()].sort((a, b) => a[1] - b[1]);
   if (!known.length) throw new Error('測位のあるクリップが1本も無い');
   const runs = [[known[0]]];
@@ -211,14 +218,30 @@ async function load(entries) {
     if (known[i][1] - known[i - 1][1] > 900) runs.push([]);
     runs[runs.length - 1].push(known[i]);
   }
-  const pick = runs.reduce((a, r) => (r[r.length - 1][1] - r[0][1] > a[a.length - 1][1] - a[0][1] ? r : a));
-  const t0 = pick[0][1] - 900, t1 = pick[pick.length - 1][1] + 900;
+  // クリップ長は MP4 を読むまで分からないので、開始時刻の間隔の中央値で代用して尺を見積もる
+  const gaps = [];
+  for (const r of runs) for (let i = 1; i < r.length; i++) gaps.push(r[i][1] - r[i - 1][1]);
+  gaps.sort((a, b) => a - b);
+  const clipLen = gaps.length ? gaps[gaps.length >> 1] : 120;
+  const sessions = runs.map((r) => ({
+    from: r[0][1], to: r[r.length - 1][1] + clipLen, n: r.length,
+    keys: r.map((x) => x[0]),
+  })).sort((a, b) => b.from - a.from);          // 新しい走行を上に
+  return { byBase, nmeaByBase, keys, starts, sessions, nUnknown: keys.filter((b) => !starts.has(b)).length };
+}
+
+// ─────────────────────────────── 選ばれた走行を全文解析 → 同期
+async function load(scan, sess) {
+  const T0 = performance.now(); const lap = [];
+  const mark = (name) => { lap.push(`${name} ${((performance.now() - T0) / 1000).toFixed(1)}s`); };
+  const BATCH = 8;
+  const { byBase, nmeaByBase, keys, starts } = scan;
+  const t0 = sess.from - 900, t1 = sess.to + 900;
   const cand = keys.filter((b) => {
     const t = starts.get(b);
     return t == null || (t >= t0 - 1500 && t <= t1 + 900);
   });
-  SESSIONS = runs.map((r) => ({ from: r[0][1], to: r[r.length - 1][1], n: r.length }));
-  mark(`走行 ${runs.length}件から最長を採用（${cand.length}/${keys.length}本, 開始時刻不明${unknown.length}本を含む）`);
+  mark(`対象 ${cand.length}/${keys.length}本（開始時刻不明 ${scan.nUnknown}本を含む）`);
   if (!cand.length) throw new Error('候補クリップが無い');
 
   const clips = [];
@@ -594,16 +617,35 @@ $('pickDir').onclick = async () => {
 };
 if (!window.showDirectoryPicker) { $('pickDir').disabled = true; $('dirName').textContent = 'この環境では非対応（下の複数選択を使用）'; }
 
-$('goBtn').onclick = async () => {
+/*
+ * 「読み込み」＝スキャンだけ。走行の一覧を出し、選ばれてから全文解析に入る。
+ * 走行が1件しか無ければ選ばせる意味が無いのでそのまま読む。
+ */
+let SCAN = null;
+const hhmm = (t) => new Date(t * 1000).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const durLabel = (s2) => { const m = Math.round(s2 / 60); return m >= 60 ? `${Math.floor(m / 60)}時間${String(m % 60).padStart(2, '0')}分` : `${m}分`; };
+
+function showSessions() {
+  const list = $('sessList');
+  list.innerHTML = '';
+  for (const se of SCAN.sessions) {
+    const b = document.createElement('button');
+    b.className = 'sess';
+    b.innerHTML = `<span class="sd">${hhmm(se.from)}</span>`
+                + `<span class="sl">${durLabel(se.to - se.from)}</span>`
+                + `<span class="sn">${se.n} クリップ　〜${hhmm(se.to)}</span>`;
+    b.onclick = () => startLoad(se);
+    list.appendChild(b);
+  }
+  $('sessWrap').style.display = 'block';
+  msg(`${SCAN.sessions.length} 件の走行が見つかった。見たいものを選ぶ。`);
+}
+
+async function startLoad(sess) {
   try {
-    const entries = dirEntries || collectFromInput($('fFiles').files);
-    if (!dirLabel && entries.length) {
-      const rp = entries[0].path || '';
-      if (rp.includes('/')) dirLabel = rp.split('/')[0];   // webkitRelativePath の先頭がフォルダ名
-    }
-    if (!entries.length) return msg('ドラレコのフォルダ、または MP4+NMEA を選んでください');
     $('goBtn').disabled = true;
-    const m = await load(entries);
+    for (const b of $('sessList').querySelectorAll('button')) b.disabled = true;
+    const m = await load(SCAN, sess);
     $('loader').style.display = 'none'; $('app').classList.add('on');
     fitStage(); buildMaps();
     V.push($('vA'), $('vB')); VR.push($('vRA'), $('vRB'));
@@ -613,37 +655,29 @@ $('goBtn').onclick = async () => {
     $('warn').textContent = w.join('  /  ');
     await seekTo(winS0, false);
     tick();
+  } catch (e) {
+    $('goBtn').disabled = false;
+    for (const b of $('sessList').querySelectorAll('button')) b.disabled = false;
+    msg('読み込み失敗: ' + e.message); console.error(e);
+  }
+}
+
+$('goBtn').onclick = async () => {
+  try {
+    const entries = dirEntries || collectFromInput($('fFiles').files);
+    if (!dirLabel && entries.length) {
+      const rp = entries[0].path || '';
+      if (rp.includes('/')) dirLabel = rp.split('/')[0];   // webkitRelativePath の先頭がフォルダ名
+    }
+    if (!entries.length) return msg('ドラレコのフォルダ、または MP4+NMEA を選んでください');
+    $('goBtn').disabled = true;
+    SCAN = await scanSessions(entries);
+    $('goBtn').disabled = false;
+    if (SCAN.sessions.length === 1) return startLoad(SCAN.sessions[0]);
+    showSessions();
   } catch (e) { $('goBtn').disabled = false; msg('読み込み失敗: ' + e.message); console.error(e); }
 };
 
-$('rearBtn').onclick = () => {
-  rearOn = !rearOn;
-  $('rearBtn').classList.toggle('on', rearOn);
-  for (const v of VR) { if (!rearOn) v.pause(); v.style.visibility = rearOn ? '' : 'hidden'; }
-  if (rearOn && playing && VR[act].dataset.clip) { VR[act].currentTime = V[act].currentTime; VR[act].play().catch(() => {}); }
-};
-(function initTileStyle() {
-  const sel = $('tileStyle');
-  for (const [k, v] of Object.entries(TILE_STYLES)) {
-    const o = document.createElement('option'); o.value = k; o.textContent = v.label; sel.appendChild(o);
-  }
-  sel.value = tileStyle;
-  sel.onchange = () => { tileStyle = sel.value; localStorage.setItem(TILE_KEY, tileStyle); applyTileStyle(); };
-})();
-$('playBtn').onclick = () => setPlay(!playing);
-$('seek').oninput = (e) => { seekTo(winS0 + (winS1 - winS0) * (e.target.value / 1000)); };
-$('back5').onclick = () => seekTo(S - 5);
-$('fwd10').onclick = () => seekTo(S + 10);
-for (const el of document.querySelectorAll('.spd[data-s]')) el.onclick = () => {
-  document.querySelectorAll('.spd[data-s]').forEach((x) => x.classList.remove('on'));
-  el.classList.add('on'); rate = +el.dataset.s; for (const v of [...V, ...VR]) v.playbackRate = rate;
-};
-/*
- * SD の絶対パスは File System Access API から取得できない（handle は .name のみ）。
- * そのため「前回入力値を記憶」＋「フォルダ名からの推定」で自動補完する。
- * macOS のリムーバブルは /Volumes/<名前> に必ずマウントされるので推定が確実に効く。
- */
-const ROOT_KEY = 'dashcam.sdroot';
 $('dlSync').onclick = () => {
   const b = new Blob([JSON.stringify(MAN, null, 2)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'sync.json'; a.click();
