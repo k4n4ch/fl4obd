@@ -319,7 +319,7 @@ async function load(entries, txtFile, gpxFile) {
                 '補完点', r.fixes.filter((f) => f.estimated).length);
     if (!r.reports.length) MAN.warnings.push('測位途絶なし（10秒以上の欠落を検出せず）');
     for (const q of r.reports) {
-      if (q.ok) MAN.info.push(`測位途絶 ${new Date(q.from * 1000).toISOString().slice(11, 19)}〜 を補完（経路 ${q.lengthKm.toFixed(2)}km / 車速積分 ${q.integratedKm.toFixed(2)}km、乖離 ${q.errPct.toFixed(2)}%、CdA ${q.cda ? q.cda.toFixed(3) : '-'}）`);
+      if (q.ok) MAN.info.push(`測位途絶 ${new Date(q.from * 1000).toISOString().slice(11, 19)}〜 を補完（経路 ${q.lengthKm.toFixed(2)}km / 車速積分 ${q.integratedKm.toFixed(2)}km、乖離 ${q.errPct.toFixed(2)}%、追い風 ${q.wind != null ? q.wind.toFixed(1) + 'm/s' : '-'}）`);
       else MAN.warnings.push(`測位途絶を補完できず: ${q.reason}`);
     }
   } catch (e) { console.error('[途絶補完] 失敗', e); MAN.warnings.push('測位途絶の補完に失敗: ' + e.message); }

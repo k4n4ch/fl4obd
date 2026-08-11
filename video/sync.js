@@ -920,17 +920,26 @@ export function integrateDistance(samples, t0, t1, { maxHole = 30 } = {}) {
 /*
  * 走行抵抗から勾配を逆算して標高を復元する。
  *
- *   sinθ = ( P/v − ½ρ·CdA·v² ) / (m·g) − a/g − Crr
+ *   sinθ = ( P/v − ½ρ·CdA·(v−w)² ) / (m·g) − a/g − Crr      w = 追い風[m/s]
  *
- * 質量と Crr は GPS 標高が既知の区間で事前に適合する。CdA だけは区間ごとに
- * 出口標高へ閉合させて解く。定速では CdA と Crr は共線で分離できないが、
- * 閉合が吸収するので実害はない（実測: CdA を ±13% 振っても復元形は 0.5m しか動かない）。
- * トンネル内の実効 CdA は外より約19%低い（往復で 0.522 / 0.513、外は 0.638 / 0.645）。
- * ピストン効果によるものと思われるが未検証。
+ * 質量・CdA・Crr は GPS 標高が既知の区間で事前に適合する（m=1675kg, CdA=0.67,
+ * Crr=0.008 で標高 RMS 4.74m）。区間ごとに解く自由度は**相対風速 w だけ**にして、
+ * 出口標高へ閉合させる。
+ *
+ * **CdA を可変にしてはいけない。** CdA は形状の量で状況では変わらない。
+ * 当初 CdA を自由度にしたところトンネル内で 0.50、開放路で 0.64 という値が出たが、
+ * 変化していたのは車体形状ではなく相対風速。一方通行トンネルでは交通が空気を
+ * 進行方向へ引きずる（ピストン効果）ため追い風になり、空気抵抗が減る。
+ * 実測では上下線とも追い風 2.8〜3.4 m/s（外部風なら片方は向かい風になるはずで、
+ * 両ボアとも追い風＝各ボアの交通による流れであることの裏付け）。開放路では 0.6〜1.3 m/s。
+ *
+ * 定速では w と CdA・Crr は縮退して区別できないが、いずれも閉合が吸収するので
+ * 復元形への影響は小さい（CdA を ±13% 振っても復元形は 0.5m しか動かない）。
+ * 効くのは質量だけ。
  */
 const RHO = 1.2, G = 9.80665;
 
-function integrateGrade(samples, t0, t1, { mass, cda, crr }) {
+function integrateGrade(samples, t0, t1, { mass, cda, crr, wind = 0 }) {
   const s = samples.filter((x) => x.t >= t0 && x.t <= t1 && Number.isFinite(x.vsp) && Number.isFinite(x.psys));
   let d = 0;
   const p = [{ s: 0, h: 0, t: s.length ? s[0].t : t0 }];
@@ -941,28 +950,29 @@ function integrateGrade(samples, t0, t1, { mass, cda, crr }) {
     if (v < 5) continue;
     d += v * dt;
     const a = (s[i].vsp - s[i - 1].vsp) / 3.6 / dt;
-    const sin = ((s[i].psys * 1000) / v - 0.5 * RHO * cda * v * v) / (mass * G) - a / G - crr;
+    const vr = Math.max(0, v - wind);                    // 相対風速。追い風で減る
+    const sin = ((s[i].psys * 1000) / v - 0.5 * RHO * cda * vr * vr) / (mass * G) - a / G - crr;
     p.push({ s: d, h: p[p.length - 1].h + sin * v * dt, t: s[i].t });
   }
   return p;
 }
 
-/** 出口標高に閉合するよう CdA を解く（単調なので二分法）。 */
-export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass = 1675, crr = 0.008, cdaRange = [0.2, 1.4] } = {}) {
+/** 出口標高に閉合するよう相対風速を解く（単調なので二分法）。 */
+export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass = 1675, cda = 0.67, crr = 0.008, windRange = [-20, 20] } = {}) {
   const dE = eleEnd - eleStart;
-  let [lo, hi] = cdaRange;
+  let [lo, hi] = windRange;
   for (let k = 0; k < 60; k++) {
     const m = (lo + hi) / 2;
-    const p = integrateGrade(samples, t0, t1, { mass, cda: m, crr });
+    const p = integrateGrade(samples, t0, t1, { mass, cda, crr, wind: m });
     if (!p.length || p.length < 2) return null;
-    if (p[p.length - 1].h > dE) lo = m; else hi = m;   // CdA↑ で積算高度↓
+    if (p[p.length - 1].h < dE) lo = m; else hi = m;   // 追い風↑ で抵抗↓ → 積算高度↑
   }
-  const cda = (lo + hi) / 2;
-  const p = integrateGrade(samples, t0, t1, { mass, cda, crr });
+  const wind = (lo + hi) / 2;
+  const p = integrateGrade(samples, t0, t1, { mass, cda, crr, wind });
   if (p.length < 2) return null;
   const L = p[p.length - 1].s;
   return {
-    cda, length: L,
+    wind, length: L,
     closed: Math.abs(p[p.length - 1].h - dE) < 0.5,
     /** 弧長 s[m] における標高[m] */
     at(s) {
@@ -982,7 +992,7 @@ export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass =
  * 表示側で実測と区別できるようにすること。
  */
 export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
-  const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0, mass = 1675, crr = 0.008 } = opts;
+  const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0, mass = 1675, cda = 0.67, crr = 0.008 } = opts;
   const [ia, ib] = gap;
   const speedAt = opts.speedAt || makeSpeedAt(obdSamples, obdDelta);
   const topts = { ...opts, speedAt };
@@ -1005,7 +1015,7 @@ export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   }
 
   const shifted = obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp, psys: x.psys }));
-  const ele = reconstructElevation(shifted, A.fix.t, B.fix.t, A.fix.ele, B.fix.ele, { mass, crr });
+  const ele = reconstructElevation(shifted, A.fix.t, B.fix.t, A.fix.ele, B.fix.ele, { mass, cda, crr });
 
   // 累積距離 → 経路上の位置。距離は経路長に合わせて正規化する
   const k = route.length / dist.total;
@@ -1018,7 +1028,7 @@ export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   }
   return {
     ok: true, pts, route, anchors: { A, B },
-    stats: { lengthKm: route.length / 1000, integratedKm: dist.total / 1000, errPct, cda: ele ? ele.cda : null,
+    stats: { lengthKm: route.length / 1000, integratedKm: dist.total / 1000, errPct, wind: ele ? ele.wind : null,
              bridgedSec: dist.bridged, droppedFixes: A.dropped.length + B.dropped.length },
   };
 }
