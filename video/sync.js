@@ -736,11 +736,64 @@ export function makeTimeline(manifest) {
  *  - トンネルの同定は不要。端点と進行方位さえあれば経路は一意に決まる。
  */
 
-/** 測位が MIN_GAP 秒以上途切れた箇所の [前, 後] インデックス対を返す。 */
-export function findTrackGaps(fixes, minGap = 10) {
+/** 参照車速。位置の妥当性判定に使う。 */
+export function makeSpeedAt(obdSamples, obdDelta = 0) {
+  const sp = obdSamples.filter((x) => Number.isFinite(x.vsp)).map((x) => ({ t: x.t + obdDelta, v: x.vsp }));
+  if (!sp.length) return () => null;
+  return (t) => {
+    if (t < sp[0].t || t > sp[sp.length - 1].t) return null;
+    let lo = 0, hi = sp.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (sp[m].t <= t) lo = m; else hi = m; }
+    const w = sp[hi].t > sp[lo].t ? (t - sp[lo].t) / (sp[hi].t - sp[lo].t) : 0;
+    return sp[lo].v + (sp[hi].v - sp[lo].v) * w;
+  };
+}
+
+/**
+ * 補完すべき区間の [前, 後] インデックス対を返す。
+ *
+ * **時間の欠落だけでは足りない。** 端末が測位を失っても最後の既知位置を返し続ける
+ * ことがあり、その場合は点が 1 秒間隔で出続けるので時間では検出できない。
+ * 実測（2026-08-09 関越 北行き, Pixel 10）では 5 分半にわたり座標が完全に同一のまま
+ * 点が出続け、時間基準では「途絶ゼロ」だった。
+ * よって位置が車速と整合しない区間も途絶として扱う。
+ */
+export function findTrackGaps(fixes, minGap = 10, speedAt = null, { maxSpdDev = 25 } = {}) {
   const out = [];
-  for (let i = 1; i < fixes.length; i++) if (fixes[i].t - fixes[i - 1].t >= minGap) out.push([i - 1, i]);
-  return out;
+  const bad = new Array(fixes.length).fill(false);
+  if (speedAt) {
+    for (let i = 1; i < fixes.length; i++) {
+      const dt = fixes[i].t - fixes[i - 1].t;
+      if (dt <= 0 || dt > 30) continue;
+      const ref = speedAt((fixes[i].t + fixes[i - 1].t) / 2);
+      if (ref == null) continue;
+      const v = (haversineMeters(fixes[i - 1].lat, fixes[i - 1].lon, fixes[i].lat, fixes[i].lon) / dt) * 3.6;
+      // 区間の終端側だけを不良にする。凍結列なら最後の実位置が端点として残る
+      if (Math.abs(v - ref) > maxSpdDev) bad[i] = true;
+    }
+  }
+  let i = 1;
+  while (i < fixes.length) {
+    if (fixes[i].t - fixes[i - 1].t >= minGap || bad[i]) {
+      let a = i - 1; while (a > 0 && bad[a]) a--;
+      let b = i;     while (b < fixes.length - 1 && bad[b]) b++;
+      if (fixes[b].t - fixes[a].t >= minGap) out.push([a, b]);
+      i = b + 1;
+    } else i++;
+  }
+  /*
+   * 隣接・近接する途絶は繋げる。間に挟まった数点は端点として信用できない
+   * （トンネルを出た直後に数秒だけ良い点が出て、また凍結する例が実測であった）。
+   * 分けたまま解こうとすると、凍結点を端点にした経路探索が破綻する（実測 1.3km の
+   * 区間に 53.7km の経路が返った）。
+   */
+  const merged = [];
+  for (const g of out) {
+    const last = merged[merged.length - 1];
+    if (last && (g[0] - last[1] <= 3 || fixes[g[0]].t - fixes[last[1]].t <= 5)) last[1] = g[1];
+    else merged.push([...g]);
+  }
+  return merged;
 }
 
 /**
@@ -931,15 +984,7 @@ export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass =
 export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0, mass = 1675, crr = 0.008 } = opts;
   const [ia, ib] = gap;
-  // 位置の妥当性判定に使う参照車速（OBD、ドラレコ時間軸へ寄せる）
-  const sp = obdSamples.filter((x) => Number.isFinite(x.vsp)).map((x) => ({ t: x.t + obdDelta, v: x.vsp }));
-  const speedAt = (t) => {
-    if (!sp.length || t < sp[0].t || t > sp[sp.length - 1].t) return null;
-    let lo = 0, hi = sp.length - 1;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (sp[m].t <= t) lo = m; else hi = m; }
-    const w = sp[hi].t > sp[lo].t ? (t - sp[lo].t) / (sp[hi].t - sp[lo].t) : 0;
-    return sp[lo].v + (sp[hi].v - sp[lo].v) * w;
-  };
+  const speedAt = opts.speedAt || makeSpeedAt(obdSamples, obdDelta);
   const topts = { ...opts, speedAt };
   const A = trimAnchor(fixes, ia, 'tail', topts);
   const B = trimAnchor(fixes, ib, 'head', topts);
@@ -980,18 +1025,23 @@ export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
 
 /** トラック全体の途絶を埋める。実測点はそのまま、補完点は estimated:true が付く。 */
 export async function fillTrackGaps(fixes, obdSamples, opts = {}) {
-  const gaps = findTrackGaps(fixes, opts.minGap ?? 10);
-  const out = fixes.map((f) => ({ ...f, estimated: false }));
+  const speedAt = makeSpeedAt(obdSamples, opts.obdDelta ?? 0);
+  const gaps = findTrackGaps(fixes, opts.minGap ?? 10, speedAt, opts);
   const reports = [];
   const inserts = [];
+  const drop = new Set();          // 補完で置き換えた区間の元データ（凍結点など）
   for (const gap of gaps) {
     let r = null;
-    try { r = await fillOneGap(fixes, gap, obdSamples, opts); }
+    try { r = await fillOneGap(fixes, gap, obdSamples, { ...opts, speedAt }); }
     catch (e) { r = { ok: false, reason: e.message }; }
     if (!r) continue;
     reports.push({ from: fixes[gap[0]].t, to: fixes[gap[1]].t, ...(r.ok ? { ok: true, ...r.stats } : { ok: false, reason: r.reason }) });
-    if (r.ok) inserts.push(...r.pts.map((p) => ({ t: p.t, lat: p.lat, lon: p.lon, ele: p.ele, estimated: true })));
+    if (!r.ok) continue;           // 置き換えられないなら元データは消さない（消して黙るより残して警告）
+    inserts.push(...r.pts.map((p) => ({ t: p.t, lat: p.lat, lon: p.lon, ele: p.ele, estimated: true })));
+    for (let i = r.anchors.A.index + 1; i < r.anchors.B.index; i++) drop.add(i);
   }
+  const out = [];
+  for (let i = 0; i < fixes.length; i++) if (!drop.has(i)) out.push({ ...fixes[i], estimated: false });
   const merged = [...out, ...inserts].sort((a, b) => a.t - b.t);
-  return { fixes: merged, reports };
+  return { fixes: merged, reports, dropped: drop.size };
 }
