@@ -678,6 +678,28 @@ $('goBtn').onclick = async () => {
   } catch (e) { $('goBtn').disabled = false; msg('読み込み失敗: ' + e.message); console.error(e); }
 };
 
+$('rearBtn').onclick = () => {
+  rearOn = !rearOn;
+  $('rearBtn').classList.toggle('on', rearOn);
+  for (const v of VR) { if (!rearOn) v.pause(); v.style.visibility = rearOn ? '' : 'hidden'; }
+  if (rearOn && playing && VR[act].dataset.clip) { VR[act].currentTime = V[act].currentTime; VR[act].play().catch(() => {}); }
+};
+(function initTileStyle() {
+  const sel = $('tileStyle');
+  for (const [k, v] of Object.entries(TILE_STYLES)) {
+    const o = document.createElement('option'); o.value = k; o.textContent = v.label; sel.appendChild(o);
+  }
+  sel.value = tileStyle;
+  sel.onchange = () => { tileStyle = sel.value; localStorage.setItem(TILE_KEY, tileStyle); applyTileStyle(); };
+})();
+$('playBtn').onclick = () => setPlay(!playing);
+$('seek').oninput = (e) => { seekTo(winS0 + (winS1 - winS0) * (e.target.value / 1000)); };
+$('back5').onclick = () => seekTo(S - 5);
+$('fwd10').onclick = () => seekTo(S + 10);
+for (const el of document.querySelectorAll('.spd[data-s]')) el.onclick = () => {
+  document.querySelectorAll('.spd[data-s]').forEach((x) => x.classList.remove('on'));
+  el.classList.add('on'); rate = +el.dataset.s; for (const v of [...V, ...VR]) v.playbackRate = rate;
+};
 $('dlSync').onclick = () => {
   const b = new Blob([JSON.stringify(MAN, null, 2)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'sync.json'; a.click();
