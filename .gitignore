@@ -10,3 +10,6 @@ video/out/
 logdata.zip
 *.zip
 .attic/
+
+# 中間生成物（ワークスペースの work/ と同じ役割）
+work/
