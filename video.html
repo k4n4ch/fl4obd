@@ -228,7 +228,7 @@ async function load(entries, txtFile) {
     await Promise.all(keys.slice(i, i + BATCH).map(async (b) => {
       try {
         const f = await nmeaByBase.get(b).getFile();
-        const r = parseNmea(await f.slice(0, 4096).text());   // 先頭だけ。末尾の欠けた行は無視される
+        const r = parseNmea(await f.slice(0, 4096).text());   // 先頭だけ。切れた末尾行はチェックサムで弾かれる
         if (r.fixes.length) starts.set(b, r.fixes[0].t);
       } catch (e) { /* 読めなければ「不明」として候補に残す */ }
     }));

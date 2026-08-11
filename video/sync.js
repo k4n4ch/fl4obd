@@ -75,6 +75,24 @@ export function speedFromPositions(pts, maxGap = 3) {
 
 // ---------------------------------------------------------------- NMEA
 
+/*
+ * NMEA のチェックサム検証。`$` と `*` の間を XOR したものが `*XX` と一致する。
+ *
+ * **切れた行を確実に弾くために要る。** 先頭 4KB だけ読む使い方をすると最後の行が
+ * 途中で切れ、フィールドが短いまま解釈されてしまう。実測（2026-08-10, SDカード）では
+ * 日付フィールド `100826` が `1008` に切れ、dd=10/mo=08/yy='' → **2000-08-10** と解釈され、
+ * 26年前の幻のセッションが一覧に現れた。フィールド長を個別に検査するより、
+ * チェックサムで一括して弾く方が漏れが無い。
+ * チェックサムを持たないセンテンス（$GSENS/$GTRIP/$JK*）には適用しない。
+ */
+function nmeaChecksumOk(line) {
+  const i = line.lastIndexOf('*');
+  if (i < 1 || line.length < i + 3) return false;
+  let c = 0;
+  for (let k = 1; k < i; k++) c ^= line.charCodeAt(k);
+  return c === parseInt(line.slice(i + 1, i + 3), 16);
+}
+
 function dmToDeg(v, hemi) {
   const f = parseFloat(v);
   if (!isFinite(f)) return NaN;
@@ -102,10 +120,12 @@ export function parseNmea(text) {
     const tag = line.slice(0, 6);
     const p = line.split(',');
     if (tag === '$GPGGA') {
+      if (!nmeaChecksumOk(line)) continue;
       const a = parseFloat(p[9]);
       if (p[1] && p[6] !== '0') alt.set(p[1], { alt: isFinite(a) ? a : null, ns: +p[7], hdop: parseFloat(p[8]) });
     } else if (tag === '$GPRMC') {
-      if (p.length < 10 || p[2] !== 'A' || !p[1] || !p[9]) continue;
+      if (!nmeaChecksumOk(line)) continue;
+      if (p.length < 10 || p[2] !== 'A' || !p[1] || p[9].length !== 6) continue;
       const hh = +p[1].slice(0, 2), mm = +p[1].slice(2, 4), ss = parseFloat(p[1].slice(4));
       const dd = +p[9].slice(0, 2), mo = +p[9].slice(2, 4), yy = +p[9].slice(4, 6);
       if (!isFinite(hh) || !isFinite(dd)) continue;
