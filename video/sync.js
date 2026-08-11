@@ -817,10 +817,12 @@ function bearingDeg(a, b) {
  * 拘束しないと分離帯のある道路で反対車線にスナップし、次の IC まで行って折り返す
  * 経路を返す（実測: 9.0km の区間に 25.5km ＝ +182%）。
  */
-export async function routeBetween(a, b, brgA, brgB, { server = 'https://router.project-osrm.org', range = 45, radius = 50, fetchImpl = fetch } = {}) {
+export async function routeBetween(a, b, brgA, brgB, { server = 'https://router.project-osrm.org', range = 45, radius = 50, fetchImpl = null } = {}) {
+  // fetch を裸で受け取ると this が外れてブラウザで Illegal invocation になりうる
+  const doFetch = fetchImpl || ((u) => fetch(u));
   const u = `${server}/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}`
     + `?overview=full&geometries=geojson&bearings=${Math.round(brgA)},${range};${Math.round(brgB)},${range}&radiuses=${radius};${radius}`;
-  const r = await fetchImpl(u);
+  const r = await doFetch(u);
   const j = await r.json();
   if (j.code !== 'Ok' || !j.routes || !j.routes.length) return { ok: false, reason: `OSRM: ${j.code}` };
   const g = j.routes[0].geometry.coordinates.map((c) => ({ lat: c[1], lon: c[0] }));

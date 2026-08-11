@@ -315,11 +315,14 @@ async function load(entries, txtFile, gpxFile) {
     const r = await fillTrackGaps(TRACK, obd.samples, { obdDelta: dObdFill });
     TRACK = r.fixes;
     FILLS = r.reports;
+    console.log('[途絶補完]', r.reports.length + '箇所', r.reports,
+                '補完点', r.fixes.filter((f) => f.estimated).length);
+    if (!r.reports.length) MAN.warnings.push('測位途絶なし（10秒以上の欠落を検出せず）');
     for (const q of r.reports) {
       if (q.ok) MAN.info.push(`測位途絶 ${new Date(q.from * 1000).toISOString().slice(11, 19)}〜 を補完（経路 ${q.lengthKm.toFixed(2)}km / 車速積分 ${q.integratedKm.toFixed(2)}km、乖離 ${q.errPct.toFixed(2)}%、CdA ${q.cda ? q.cda.toFixed(3) : '-'}）`);
       else MAN.warnings.push(`測位途絶を補完できず: ${q.reason}`);
     }
-  } catch (e) { MAN.warnings.push('測位途絶の補完に失敗: ' + e.message); }
+  } catch (e) { console.error('[途絶補完] 失敗', e); MAN.warnings.push('測位途絶の補完に失敗: ' + e.message); }
   mark('途絶補完');
 
   // 前後左右G: ドラレコ内蔵IMU($GSENS 10Hz)。ドラレコ自身のNMEA由来なので既に映像と同一時間軸。
