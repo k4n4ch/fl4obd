@@ -93,7 +93,9 @@ export function parseNmea(text) {
   const gsensRaw = [];
   const signatures = new Set();
   const seen = new Set();
-  const alt = new Map();          // hhmmss.ss → 標高[m]（$GPGGA。$GPRMC は標高を持たない）
+  // hhmmss.ss → {alt, ns, hdop}（$GPGGA。$GPRMC は標高も測位品質も持たない）
+  // ns/hdop は坑口での測位劣化を弾くのに要る（fillTrackGaps 参照）。
+  const alt = new Map();
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
     if (!line.startsWith('$')) continue;
@@ -101,7 +103,7 @@ export function parseNmea(text) {
     const p = line.split(',');
     if (tag === '$GPGGA') {
       const a = parseFloat(p[9]);
-      if (p[1] && isFinite(a) && p[6] !== '0') alt.set(p[1], a);
+      if (p[1] && p[6] !== '0') alt.set(p[1], { alt: isFinite(a) ? a : null, ns: +p[7], hdop: parseFloat(p[8]) });
     } else if (tag === '$GPRMC') {
       if (p.length < 10 || p[2] !== 'A' || !p[1] || !p[9]) continue;
       const hh = +p[1].slice(0, 2), mm = +p[1].slice(2, 4), ss = parseFloat(p[1].slice(4));
@@ -112,7 +114,7 @@ export function parseNmea(text) {
       if (!isFinite(lat) || !isFinite(lon)) continue;
       if (!seen.has(t)) {
         seen.add(t);
-        fixes.push({ t, lat, lon, spd: (parseFloat(p[7]) || 0) * 1.852, ele: null, _tk: p[1] }); // knot → km/h
+        fixes.push({ t, lat, lon, spd: (parseFloat(p[7]) || 0) * 1.852, ele: null, ns: null, hdop: null, _tk: p[1] }); // knot → km/h
       }
       gsensRaw.push({ mark: t });
     } else if (tag === '$GSENS') {
@@ -124,7 +126,11 @@ export function parseNmea(text) {
   }
   fixes.sort((a, b) => a.t - b.t);
   // 標高を突合。$GPGGA が $GPRMC の前後どちらに来るかは機器依存なので、全部読んでから割り当てる
-  for (const f of fixes) { const a = alt.get(f._tk); if (a !== undefined) f.ele = a; delete f._tk; }
+  for (const f of fixes) {
+    const a = alt.get(f._tk);
+    if (a !== undefined) { f.ele = a.alt; f.ns = a.ns; f.hdop = a.hdop; }
+    delete f._tk;
+  }
   // $GSENS に時刻を割り当て（測位センテンス間を等分）
   const gsens = [];
   let pend = [];
@@ -716,4 +722,272 @@ export function makeTimeline(manifest) {
       return null;
     },
   };
+}
+
+// ---------------------------------------------------------------- 測位途絶の補完
+/*
+ * トンネル等で測位が途切れた区間を、OBD の車速と道路形状から埋める。
+ *
+ * 前提と根拠（2026-08-10 関越トンネル 往復で実測）:
+ *  - 車速の積分と OSRM の経路長は 11km で 0.18% 一致する。位置は数 m で復元できる。
+ *  - 端点の測位は信用できない。進入側は坑口内 140m まで解が出るが衛星4個/HDOP6.3 で
+ *    標高が壊れる。脱出側は坑口外 44m で再獲得するが受信機が未収束で標高が 6.4m 飛ぶ。
+ *    前者は HDOP、後者は滑らかさでしか捕まらないので両方で判定する。
+ *  - トンネルの同定は不要。端点と進行方位さえあれば経路は一意に決まる。
+ */
+
+/** 測位が MIN_GAP 秒以上途切れた箇所の [前, 後] インデックス対を返す。 */
+export function findTrackGaps(fixes, minGap = 10) {
+  const out = [];
+  for (let i = 1; i < fixes.length; i++) if (fixes[i].t - fixes[i - 1].t >= minGap) out.push([i - 1, i]);
+  return out;
+}
+
+/**
+ * 境界から内側へ、信用できない測位を剥がして端点を選ぶ。
+ * side='tail' は途絶の手前側（末尾へ向かって剥がす）、'head' は復帰側。
+ * トンネル形状には依存しない。市街地の高架下など測位が切れる場面すべてに同じ判定が使える。
+ */
+export function trimAnchor(fixes, idx, side, { minSats = 6, maxHdop = 2, maxVertDev = 3, maxSpdDev = 25, maxDrop = 60, speedAt = null } = {}) {
+  const step = side === 'tail' ? -1 : 1;
+  const dropped = [];
+  let i = idx;
+  for (let k = 0; k < maxDrop; k++) {
+    const f = fixes[i];
+    if (!f) break;
+    /*
+     * ⓪位置の妥当性。iPhone は測位を失っても「最後の既知位置」を返し続け、
+     * 気圧高度計由来の標高だけが更新される。実測（2026-08-10 関越）では
+     * 109km/h 走行中に座標が完全に同一の点が 25 秒続いた。
+     * 座標が凍っても標高は動くので、垂直の判定では捕まらない。
+     */
+    if (speedAt) {
+      const nb = fixes[i + step];
+      const ref = speedAt(f.t);
+      if (nb && ref != null) {
+        const dt = Math.abs(nb.t - f.t);
+        if (dt > 0 && dt < 30) {
+          const v = (haversineMeters(f.lat, f.lon, nb.lat, nb.lon) / dt) * 3.6;
+          if (Math.abs(v - ref) > maxSpdDev) {
+            dropped.push({ t: f.t, ele: f.ele, why: `位置差分速度 ${v.toFixed(0)}km/h が車速 ${ref.toFixed(0)}km/h と不一致` });
+            i += step; continue;
+          }
+        }
+      }
+    }
+    // ①測位品質。進入側の劣化はここで捕まる（衛星 11→4, HDOP 0.86→6.35）
+    if ((f.hdop != null && f.hdop >= maxHdop) || (f.ns != null && f.ns < minSats)) {
+      dropped.push({ t: f.t, ele: f.ele, why: `衛星${f.ns} HDOP${f.hdop}` }); i += step; continue;
+    }
+    // ②垂直速度の滑らかさ。再獲得直後の未収束はここでしか捕まらない（HDOP は正常なまま）
+    const inner = [];
+    for (let j = 1; j <= 11; j++) { const g = fixes[i + step * j]; if (g && g.ele != null) inner.push(g); }
+    const rates = [];
+    for (let j = 1; j < inner.length; j++) {
+      const dt = Math.abs(inner[j].t - inner[j - 1].t);
+      if (dt > 0 && dt < 3) rates.push((inner[j].ele - inner[j - 1].ele) / (inner[j].t - inner[j - 1].t));
+    }
+    if (rates.length && f.ele != null && inner.length) {
+      rates.sort((a, b) => a - b);
+      const med = rates[rates.length >> 1];
+      const nb = inner[0], dt = nb.t - f.t;
+      if (Math.abs(dt) > 0 && Math.abs(dt) < 3) {
+        const rate = (nb.ele - f.ele) / dt;
+        if (Math.abs(rate - med) > maxVertDev) {
+          dropped.push({ t: f.t, ele: f.ele, why: `垂直速度 ${rate.toFixed(1)}m/s (近傍中央値 ${med.toFixed(1)})` });
+          i += step; continue;
+        }
+      }
+    }
+    break;
+  }
+  return { index: i, fix: fixes[i], dropped };
+}
+
+/** 2点間の進行方位[deg]。OSRM の bearings 拘束に使う。 */
+function bearingDeg(a, b) {
+  const y = (b.lon - a.lon) * Math.cos((a.lat * Math.PI) / 180);
+  return ((Math.atan2(y, b.lat - a.lat) * 180) / Math.PI + 360) % 360;
+}
+
+/**
+ * OSRM で 2 点間の経路を引く。進行方位で拘束するのが要点。
+ * 拘束しないと分離帯のある道路で反対車線にスナップし、次の IC まで行って折り返す
+ * 経路を返す（実測: 9.0km の区間に 25.5km ＝ +182%）。
+ */
+export async function routeBetween(a, b, brgA, brgB, { server = 'https://router.project-osrm.org', range = 45, radius = 50, fetchImpl = fetch } = {}) {
+  const u = `${server}/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}`
+    + `?overview=full&geometries=geojson&bearings=${Math.round(brgA)},${range};${Math.round(brgB)},${range}&radiuses=${radius};${radius}`;
+  const r = await fetchImpl(u);
+  const j = await r.json();
+  if (j.code !== 'Ok' || !j.routes || !j.routes.length) return { ok: false, reason: `OSRM: ${j.code}` };
+  const g = j.routes[0].geometry.coordinates.map((c) => ({ lat: c[1], lon: c[0] }));
+  const cum = [0];
+  for (let i = 1; i < g.length; i++) cum.push(cum[i - 1] + haversineMeters(g[i - 1].lat, g[i - 1].lon, g[i].lat, g[i].lon));
+  return { ok: true, pts: g, cum, length: cum[cum.length - 1], osrmLength: j.routes[0].distance };
+}
+
+/** 経路上の弧長 s[m] における緯度経度。 */
+function alongRoute(route, s) {
+  const { pts, cum } = route;
+  if (s <= 0) return pts[0];
+  if (s >= cum[cum.length - 1]) return pts[pts.length - 1];
+  let lo = 0, hi = cum.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= s) lo = m; else hi = m; }
+  const w = (s - cum[lo]) / (cum[hi] - cum[lo]);
+  return { lat: pts[lo].lat + (pts[hi].lat - pts[lo].lat) * w, lon: pts[lo].lon + (pts[hi].lon - pts[lo].lon) * w };
+}
+
+/**
+ * 車速を台形則で積分して累積距離を返す。
+ * OBD 自身の欠測も内挿で埋める。飛ばすと距離が抜ける（実測 17秒 = 520m）。
+ */
+export function integrateDistance(samples, t0, t1, { maxHole = 30 } = {}) {
+  const s = samples.filter((x) => x.t >= t0 && x.t <= t1 && Number.isFinite(x.vsp));
+  if (s.length < 2) return null;
+  const out = [{ t: s[0].t, d: 0 }];
+  let d = 0, bridged = 0;
+  for (let i = 1; i < s.length; i++) {
+    const dt = s[i].t - s[i - 1].t;
+    if (dt <= 0 || dt > maxHole) continue;
+    if (dt > 3) bridged += dt;
+    d += ((s[i].vsp + s[i - 1].vsp) / 2 / 3.6) * dt;
+    out.push({ t: s[i].t, d });
+  }
+  // 端の未被覆（最初/最後のサンプルと境界時刻の差）を等速で補う
+  const head = (s[0].t - t0) * (s[0].vsp / 3.6);
+  const tail = (t1 - s[s.length - 1].t) * (s[s.length - 1].vsp / 3.6);
+  return { series: out, total: d + head + tail, head, tail, bridged, n: s.length };
+}
+
+/*
+ * 走行抵抗から勾配を逆算して標高を復元する。
+ *
+ *   sinθ = ( P/v − ½ρ·CdA·v² ) / (m·g) − a/g − Crr
+ *
+ * 質量と Crr は GPS 標高が既知の区間で事前に適合する。CdA だけは区間ごとに
+ * 出口標高へ閉合させて解く。定速では CdA と Crr は共線で分離できないが、
+ * 閉合が吸収するので実害はない（実測: CdA を ±13% 振っても復元形は 0.5m しか動かない）。
+ * トンネル内の実効 CdA は外より約19%低い（往復で 0.522 / 0.513、外は 0.638 / 0.645）。
+ * ピストン効果によるものと思われるが未検証。
+ */
+const RHO = 1.2, G = 9.80665;
+
+function integrateGrade(samples, t0, t1, { mass, cda, crr }) {
+  const s = samples.filter((x) => x.t >= t0 && x.t <= t1 && Number.isFinite(x.vsp) && Number.isFinite(x.psys));
+  let d = 0;
+  const p = [{ s: 0, h: 0, t: s.length ? s[0].t : t0 }];
+  for (let i = 1; i < s.length; i++) {
+    const dt = s[i].t - s[i - 1].t;
+    if (dt <= 0 || dt > 30) continue;
+    const v = (s[i].vsp + s[i - 1].vsp) / 2 / 3.6;
+    if (v < 5) continue;
+    d += v * dt;
+    const a = (s[i].vsp - s[i - 1].vsp) / 3.6 / dt;
+    const sin = ((s[i].psys * 1000) / v - 0.5 * RHO * cda * v * v) / (mass * G) - a / G - crr;
+    p.push({ s: d, h: p[p.length - 1].h + sin * v * dt, t: s[i].t });
+  }
+  return p;
+}
+
+/** 出口標高に閉合するよう CdA を解く（単調なので二分法）。 */
+export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass = 1675, crr = 0.008, cdaRange = [0.2, 1.4] } = {}) {
+  const dE = eleEnd - eleStart;
+  let [lo, hi] = cdaRange;
+  for (let k = 0; k < 60; k++) {
+    const m = (lo + hi) / 2;
+    const p = integrateGrade(samples, t0, t1, { mass, cda: m, crr });
+    if (!p.length || p.length < 2) return null;
+    if (p[p.length - 1].h > dE) lo = m; else hi = m;   // CdA↑ で積算高度↓
+  }
+  const cda = (lo + hi) / 2;
+  const p = integrateGrade(samples, t0, t1, { mass, cda, crr });
+  if (p.length < 2) return null;
+  const L = p[p.length - 1].s;
+  return {
+    cda, length: L,
+    closed: Math.abs(p[p.length - 1].h - dE) < 0.5,
+    /** 弧長 s[m] における標高[m] */
+    at(s) {
+      if (s <= 0) return eleStart;
+      if (s >= L) return eleEnd;
+      let a = 0, b = p.length - 1;
+      while (b - a > 1) { const m = (a + b) >> 1; if (p[m].s <= s) a = m; else b = m; }
+      const w = (s - p[a].s) / (p[b].s - p[a].s);
+      return eleStart + p[a].h + (p[b].h - p[a].h) * w;
+    },
+  };
+}
+
+/**
+ * 途絶区間を 1 つ埋める。合格判定に落ちたら null を返す（黙って通さない）。
+ * 返す点はすべて estimated:true。位置は裏付けがあるが標高は推定なので、
+ * 表示側で実測と区別できるようにすること。
+ */
+export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
+  const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0, mass = 1675, crr = 0.008 } = opts;
+  const [ia, ib] = gap;
+  // 位置の妥当性判定に使う参照車速（OBD、ドラレコ時間軸へ寄せる）
+  const sp = obdSamples.filter((x) => Number.isFinite(x.vsp)).map((x) => ({ t: x.t + obdDelta, v: x.vsp }));
+  const speedAt = (t) => {
+    if (!sp.length || t < sp[0].t || t > sp[sp.length - 1].t) return null;
+    let lo = 0, hi = sp.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (sp[m].t <= t) lo = m; else hi = m; }
+    const w = sp[hi].t > sp[lo].t ? (t - sp[lo].t) / (sp[hi].t - sp[lo].t) : 0;
+    return sp[lo].v + (sp[hi].v - sp[lo].v) * w;
+  };
+  const topts = { ...opts, speedAt };
+  const A = trimAnchor(fixes, ia, 'tail', topts);
+  const B = trimAnchor(fixes, ib, 'head', topts);
+  if (!A.fix || !B.fix) return null;
+  const before = fixes[Math.max(0, A.index - 5)], after = fixes[Math.min(fixes.length - 1, B.index + 5)];
+  if (!before || !after) return null;
+
+  const dist = integrateDistance(obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp })), A.fix.t, B.fix.t);
+  if (!dist || dist.total < minGapMeters) return null;
+
+  const route = await routeBetween(A.fix, B.fix, bearingDeg(before, A.fix), bearingDeg(B.fix, after), opts);
+  if (!route.ok) return { ok: false, reason: route.reason, anchors: { A, B } };
+
+  // 合格判定①: 経路長と車速積分が一致するか
+  const errPct = ((dist.total - route.length) / route.length) * 100;
+  if (Math.abs(errPct) > lengthTolPct) {
+    return { ok: false, reason: `経路長 ${(route.length / 1000).toFixed(2)}km と車速積分 ${(dist.total / 1000).toFixed(2)}km が ${errPct.toFixed(1)}% 乖離`, anchors: { A, B } };
+  }
+
+  const shifted = obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp, psys: x.psys }));
+  const ele = reconstructElevation(shifted, A.fix.t, B.fix.t, A.fix.ele, B.fix.ele, { mass, crr });
+
+  // 累積距離 → 経路上の位置。距離は経路長に合わせて正規化する
+  const k = route.length / dist.total;
+  const pts = [];
+  for (const q of dist.series) {
+    const s = q.d * k;
+    if (pts.length && s - pts[pts.length - 1]._s < stepMeters) continue;
+    const p = alongRoute(route, s);
+    pts.push({ t: q.t, lat: p.lat, lon: p.lon, ele: ele ? ele.at(s) : null, estimated: true, _s: s });
+  }
+  return {
+    ok: true, pts, route, anchors: { A, B },
+    stats: { lengthKm: route.length / 1000, integratedKm: dist.total / 1000, errPct, cda: ele ? ele.cda : null,
+             bridgedSec: dist.bridged, droppedFixes: A.dropped.length + B.dropped.length },
+  };
+}
+
+/** トラック全体の途絶を埋める。実測点はそのまま、補完点は estimated:true が付く。 */
+export async function fillTrackGaps(fixes, obdSamples, opts = {}) {
+  const gaps = findTrackGaps(fixes, opts.minGap ?? 10);
+  const out = fixes.map((f) => ({ ...f, estimated: false }));
+  const reports = [];
+  const inserts = [];
+  for (const gap of gaps) {
+    let r = null;
+    try { r = await fillOneGap(fixes, gap, obdSamples, opts); }
+    catch (e) { r = { ok: false, reason: e.message }; }
+    if (!r) continue;
+    reports.push({ from: fixes[gap[0]].t, to: fixes[gap[1]].t, ...(r.ok ? { ok: true, ...r.stats } : { ok: false, reason: r.reason }) });
+    if (r.ok) inserts.push(...r.pts.map((p) => ({ t: p.t, lat: p.lat, lon: p.lon, ele: p.ele, estimated: true })));
+  }
+  const merged = [...out, ...inserts].sort((a, b) => a.t - b.t);
+  return { fixes: merged, reports };
 }

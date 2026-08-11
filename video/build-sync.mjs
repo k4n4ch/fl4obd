@@ -11,7 +11,7 @@
  */
 import { readFile, readdir, stat, open, writeFile } from 'node:fs/promises';
 import { join, extname, basename, dirname } from 'node:path';
-import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline } from './sync.js';
+import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, fillTrackGaps } from './sync.js';
 
 function args() {
   const a = process.argv.slice(2), o = {};
@@ -93,6 +93,24 @@ console.log(`  共通区間: ${iso(m.window.startUtc)} 〜 ${iso(m.window.endUtc
 if (m.info.length) console.log('  情報: ' + m.info.join(' / '));
 console.log(`  データ: DID=${m.data.obdDids.map((d) => d.toString(16)).join(',')} 2920=${m.data.nObd} fix=${m.data.nFixes} gpx=${m.data.nGpx} map=${m.data.mapSource} クリップ ${m.data.nClipsInput}→${m.data.nClipsDeduped}(${m.data.nSessions}セッション)`);
 if (m.warnings.length) console.log('\n警告:\n' + m.warnings.map((w) => '  - ' + w).join('\n'));
+
+// 測位途絶の補完（video.html と同じ関数を通す。CLI でも合否と残差を確認できるように）
+{
+  const useGpx = m.data.mapSource === 'gpx' && gpx;
+  const dGpx = m.offsets.gpx.ok ? m.offsets.gpx.delta : 0;
+  const track = useGpx
+    ? gpx.map((p) => ({ t: p.t + dGpx, lat: p.lat, lon: p.lon, ele: p.ele }))
+    : S.clips.flatMap((c) => (clips.find((x) => x.name === c.name) || { fixes: [] }).fixes).sort((a, b) => a.t - b.t);
+  deriveTelemetry(obd);
+  const r = await fillTrackGaps(track, obd.samples, { obdDelta: m.offsets.obd.ok ? m.offsets.obd.delta : 0 });
+  console.log(`\n測位途絶の補完 (${useGpx ? 'GPX' : 'NMEA'}): ${r.reports.length}箇所`);
+  for (const q of r.reports) {
+    const w = `${iso(q.from)}〜${iso(q.to)}`;
+    if (q.ok) console.log(`  ✓ ${w}  経路 ${q.lengthKm.toFixed(3)}km / 車速積分 ${q.integratedKm.toFixed(3)}km  乖離 ${q.errPct.toFixed(2)}%  CdA ${q.cda ? q.cda.toFixed(3) : '-'}  端点棄却 ${q.droppedFixes}点`);
+    else console.log(`  ✗ ${w}  ${q.reason}`);
+  }
+  if (r.reports.length) console.log(`  ${track.length} → ${r.fixes.length}点 (補完 ${r.fixes.filter((f) => f.estimated).length})`);
+}
 
 const tl = makeTimeline(m);
 const mid = (m.window.startUtc + m.window.endUtc) / 2;
