@@ -48,7 +48,7 @@ for (const mp4 of mp4s) {
   const nme = nmeaByBase.get(base);
   if (!nme) continue;                                  // NMEAが無いクリップは同期に使えない
   const { fixes, gsens, signatures } = parseNmea(await readFile(nme, 'latin1'));
-  if (!fixes.length) continue;
+  // 測位ゼロ（トンネル等）でも捨てない。配置は creation_time+尺で決まる。
   const fh = await open(mp4, 'r');
   const size = (await fh.stat()).size;
   const reader = async (off, len) => {
@@ -63,7 +63,8 @@ for (const mp4 of mp4s) {
   clips.push({
     name: base, path: mp4, nmeaPath: nme, channelRank: depth(mp4) - minDepth,
     creationTime: meta.creationTime, duration: meta.duration,
-    nmeaFirst: fixes[0].t, nmeaLast: fixes[fixes.length - 1].t,
+    nmeaFirst: fixes.length ? fixes[0].t : NaN,
+    nmeaLast: fixes.length ? fixes[fixes.length - 1].t : NaN,
     fixes, gsensCount: gsens.length, signatures,
   });
 }

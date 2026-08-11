@@ -465,32 +465,53 @@ export function estimateOffset(src, ref, opts = {}) {
 
 // ---------------------------------------------------------------- sessions & anchor
 
+/*
+ * クリップの並び・連続性は creation_time + duration で判定する（NMEA ではない）。
+ *
+ * NMEA を使うと、測位が無いクリップ（トンネル）や先頭の測位が遅れたクリップで
+ * 見かけの切れ目ができ、1本の録画が複数セッションに割れる。実測（2026-08-10、
+ * 190クリップ）では 16 セッションに分断され、OBD 2時間13分に対し採用は 59 分だった。
+ *
+ * creation_time はローカル時刻を書く機種があるため絶対時刻としては信用できないが、
+ * ここで使うのはクリップ間の差だけで、一定のオフセットは差し引きで消える。
+ * 絶対時刻（アンカー A）は従来どおり NMEA から求める。
+ */
+const clipStart = (c) => c.creationTime;
+const clipEnd = (c) => c.creationTime + c.duration;
+
 /**
  * 時間的に重複するクリップを1本に絞る。
  * 多チャンネル機（前方/後方カメラが同名）や、EVENT/PARKING に同じ映像が複製される機種を
  * ディレクトリ名に依存せず汎用的に扱うため、重複は「時間の重なり」で判定する。
  * 優先順位は channelRank（小さいほど優先。呼び出し側が設定）→ 名前。
  */
-export function dedupeOverlaps(clips, { tol = 0.5 } = {}) {
+export function dedupeOverlaps(clips, { overlapRatio = 0.5 } = {}) {
   const sorted = [...clips].sort(
-    (a, b) => a.nmeaFirst - b.nmeaFirst || (a.channelRank ?? 0) - (b.channelRank ?? 0) || String(a.name).localeCompare(String(b.name))
+    (a, b) => clipStart(a) - clipStart(b) || (a.channelRank ?? 0) - (b.channelRank ?? 0) || String(a.name).localeCompare(String(b.name))
   );
   const kept = [], dropped = [];
   for (const c of sorted) {
     const last = kept[kept.length - 1];
-    if (last && c.nmeaFirst < last.nmeaLast - tol) { dropped.push(c); continue; }
+    // 重複＝同じ時間帯を覆っていること。固定の許容値では判定できない：
+    // creation_time は1秒分解能で、連続録画でも隣接クリップの切れ目が実測 -3.00〜+12.43s
+    // ばらつく（2026-08-10, 191クリップ）。旧 tol=0.5s では 28 件の正当な連続クリップを
+    // 重複として捨て、その穴でセッションがさらに分断されていた。
+    // 短い方の尺の半分を超えて重なる場合だけ重複とみなす。
+    if (last && clipEnd(last) - clipStart(c) > overlapRatio * Math.min(c.duration, last.duration)) {
+      dropped.push(c); continue;
+    }
     kept.push(c);
   }
   return { clips: kept, dropped };
 }
 
-/** NMEA の連続性でクリップをセッションに分割する（creation_time より信頼できる）。 */
+/** 録画の連続性でクリップをセッションに分割する。測位の有無には依存しない。 */
 export function groupSessions(clips, gapTol = 10) {
-  const sorted = [...clips].sort((a, b) => a.nmeaFirst - b.nmeaFirst);
+  const sorted = [...clips].sort((a, b) => clipStart(a) - clipStart(b));
   const out = [];
   let cur = [];
   for (const c of sorted) {
-    if (cur.length && c.nmeaFirst - cur[cur.length - 1].nmeaLast > gapTol) { out.push(cur); cur = []; }
+    if (cur.length && clipStart(c) - clipEnd(cur[cur.length - 1]) > gapTol) { out.push(cur); cur = []; }
     cur.push(c);
   }
   if (cur.length) out.push(cur);
@@ -506,18 +527,26 @@ export function groupSessions(clips, gapTol = 10) {
  */
 export function computeAnchor(session, { outlierTol = 1.5 } = {}) {
   let acc = 0;
-  const rows = session.map((c) => { const r = { clip: c, S0: acc, a: c.nmeaFirst - acc }; acc += c.duration; return r; });
-  const med = median(rows.map((r) => r.a));
-  const kept = rows.filter((r) => Math.abs(r.a - med) <= outlierTol);
-  const excluded = rows.filter((r) => Math.abs(r.a - med) > outlierTol).map((r) => ({ name: r.clip.name, a: r.a }));
-  const use = kept.length ? kept : rows;
-  const A = use.reduce((s, r) => s + r.a, 0) / use.length;
-  const sd = Math.sqrt(use.reduce((s, r) => s + (r.a - A) ** 2, 0) / Math.max(use.length, 1));
+  const rows = session.map((c) => {
+    const r = { clip: c, S0: acc, a: Number.isFinite(c.nmeaFirst) ? c.nmeaFirst - acc : NaN };
+    acc += c.duration;
+    return r;
+  });
+  // 測位の無いクリップ（トンネル等）はアンカーの材料にならないが、S0 は尺で決まるので
+  // セッションからは外さない。A さえ決まれば、測位が無くても正しい時刻に置ける。
+  const withFix = rows.filter((r) => Number.isFinite(r.a));
+  const noFix = rows.filter((r) => !Number.isFinite(r.a)).map((r) => r.clip.name);
+  const med = median(withFix.map((r) => r.a));
+  const kept = withFix.filter((r) => Math.abs(r.a - med) <= outlierTol);
+  const excluded = withFix.filter((r) => Math.abs(r.a - med) > outlierTol).map((r) => ({ name: r.clip.name, a: r.a }));
+  const use = kept.length ? kept : withFix;
+  const A = use.length ? use.reduce((s, r) => s + r.a, 0) / use.length : NaN;
+  const sd = use.length ? Math.sqrt(use.reduce((s, r) => s + (r.a - A) ** 2, 0) / use.length) : NaN;
   // NMEA先頭 − creation_time（機種特性。診断用に実測する。定数化しない）
   const leads = session.map((c) => c.nmeaFirst - c.creationTime).filter(isFinite);
   return {
     A, sd, sem: sd / Math.sqrt(Math.max(use.length, 1)),
-    nUsed: use.length, excluded,
+    nUsed: use.length, excluded, noFix,
     sessionDuration: acc,
     nmeaLead: median(leads),
     clips: rows.map((r) => ({ name: r.clip.name, S0: r.S0, duration: r.clip.duration })),
@@ -545,9 +574,21 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
     ? [obd.samples[0].t, obd.samples[obd.samples.length - 1].t]
     : [NaN, NaN];
   // OBD 区間と最も重なるセッションを選ぶ
+  /*
+   * OBD 区間との重なりは NMEA（真の UTC）で測る。creation_time はローカル時刻を書く
+   * 機種があり、絶対時刻どうしの比較には使えない（クリップ間の差なら消えるオフセットが、
+   * OBD との比較では消えない）。測位が1つも無いセッションだけ creation_time に落とす。
+   */
+  const sessionSpan = (s) => {
+    const first = s.map((c) => c.nmeaFirst).filter(Number.isFinite);
+    const last = s.map((c) => c.nmeaLast).filter(Number.isFinite);
+    if (first.length) return [Math.min(...first), Math.max(...last)];
+    return [clipStart(s[0]), clipEnd(s[s.length - 1])];
+  };
   let session = sessions[0], bestOv = -1;
   for (const s of sessions) {
-    const ov = Math.min(s[s.length - 1].nmeaLast, obdSpan[1]) - Math.max(s[0].nmeaFirst, obdSpan[0]);
+    const [a, b] = sessionSpan(s);
+    const ov = Math.min(b, obdSpan[1]) - Math.max(a, obdSpan[0]);
     if (ov > bestOv) { bestOv = ov; session = s; }
   }
   const anchor = computeAnchor(session);
@@ -604,6 +645,7 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   const info = [];
   if (dropped.length) info.push(`時間重複で除外したクリップ ${dropped.length}本（多チャンネル/複製）。`);
   if (sessions.length > 1) info.push(`セッション ${sessions.length}件を検出し、OBD区間と最も重なる1件を採用した。`);
+  if (anchor.noFix.length) info.push(`測位の無いクリップ ${anchor.noFix.length}本（トンネル等）を尺で配置した。`);
   if (anchor.excluded.length) warnings.push(`アンカーから除外: ${anchor.excluded.slice(0, 5).map((e) => e.name).join(', ')}${anchor.excluded.length > 5 ? ` 他${anchor.excluded.length - 5}本` : ''}`);
   if (Math.abs(obdShift) > 60) warnings.push(`スマホ時計オフセットが異常に大きい（${obdShift.toFixed(1)}s）。要確認。`);
   if (!(end > start)) warnings.push('映像・NMEA・OBD の共通区間が存在しない。');
@@ -618,6 +660,7 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
       anchorSd: anchor.sd, anchorSem: anchor.sem, anchorNUsed: anchor.nUsed,
       nmeaLeadMeasured: anchor.nmeaLead,
       excludedFromAnchor: anchor.excluded,
+      noFixClips: anchor.noFix,
       clips: anchor.clips,
     },
     offsets: {

@@ -255,8 +255,10 @@ async function load(entries, txtFile, gpxFile) {
     const got = await Promise.all(cand.slice(i, i + BATCH).map(async (b) => {
       const { entry, depth, rearEntry } = byBase.get(b);
       const { fixes, gsens, signatures } = parseNmea(await (await nmeaByBase.get(b).getFile()).text());
-      if (!fixes.length) return null;
-      if (fixes[fixes.length - 1].t < t0 || fixes[0].t > t1) return null;   // ここで厳密に絞る
+      // 測位ゼロ（トンネル等）でも捨てない。時間で絞れないので候補に残し、
+      // セッション分割（creation_time の連続性）で正しい位置に落ちるのに任せる。
+      // 捨てると録画が前後で分断され、片側しか表示されなくなる。
+      if (fixes.length && (fixes[fixes.length - 1].t < t0 || fixes[0].t > t1)) return null;   // ここで厳密に絞る
       const file = await entry.getFile();
       const rearFile = rearEntry ? await rearEntry.getFile() : null;
       let meta;
@@ -264,7 +266,8 @@ async function load(entries, txtFile, gpxFile) {
         meta = await parseMp4Meta(async (off, len) => await file.slice(off, off + len).arrayBuffer(), file.size);
       } catch (e) { console.warn(b, e.message); return null; }
       return { name: b, channelRank: depth, creationTime: meta.creationTime, duration: meta.duration,
-               nmeaFirst: fixes[0].t, nmeaLast: fixes[fixes.length - 1].t, fixes, gsens, signatures, file, rearFile,
+               nmeaFirst: fixes.length ? fixes[0].t : NaN,
+               nmeaLast: fixes.length ? fixes[fixes.length - 1].t : NaN, fixes, gsens, signatures, file, rearFile,
                path: entry.path, rearPath: rearEntry ? rearEntry.path : null };
     }));
     for (const c of got) if (c) clips.push(c);
