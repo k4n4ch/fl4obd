@@ -327,8 +327,10 @@ async function load(scan, sess) {
 
 // ─────────────────────────────── マップ
 const TILE_KEY = 'dashcam.tilestyle';
-let tileStyle = localStorage.getItem(TILE_KEY) || 'darknl';
-if (!TILE_STYLES[tileStyle]) tileStyle = 'darknl';
+// 既定はライト(OSM)。地名や施設名が読めるので「どこを走ったか」を追いやすい。
+// 選択は localStorage に残るので、変えれば次回から引き継がれる。
+let tileStyle = localStorage.getItem(TILE_KEY) || 'light';
+if (!TILE_STYLES[tileStyle]) tileStyle = 'light';
 let tileLayers = [];
 function tiles() {
   const l = L.tileLayer(TILE_STYLES[tileStyle].url, { maxZoom: 19, attribution: '' });
