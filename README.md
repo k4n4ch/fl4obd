@@ -9,6 +9,7 @@ ELM327 BLE ドングル経由で、アナログメーター表示・**i-MMD エ�
 | **ログビュワー** | [https://k4n4ch.github.io/fl4obd/viewer.html](https://k4n4ch.github.io/fl4obd/viewer.html) |
 | **走行リプレイ** | [https://k4n4ch.github.io/fl4obd/replay.html](https://k4n4ch.github.io/fl4obd/replay.html) |
 | **走行動画 × テレメトリ** | [https://k4n4ch.github.io/fl4obd/video.html](https://k4n4ch.github.io/fl4obd/video.html) |
+| **ドラレコ 走行ビューア** | [https://k4n4ch.github.io/fl4obd/dashcam.html](https://k4n4ch.github.io/fl4obd/dashcam.html) |
 
 ![走行動画 × テレメトリ](docs/screenshot-video.png)
 
@@ -198,6 +199,38 @@ GPS 付きの走行を OpenStreetMap 上で再生する。**[replay.html](https:
 - **前後左右G**はドラレコ内蔵 IMU（NMEA の `$GSENS` 10Hz）から表示。ボールは体が押される方向に動き、合成G も併記する。
 - **書き出し**：テレメトリだけを 1 本のファイル（H.264）に書き出し、映像との合成は**ローカルの ffmpeg 1 コマンド**で行う（コマンドは `compose.txt` に生成される）。Windows / Mac 共通。
 - 再生は Android Chrome でも可（フォルダ選択が使えないので MP4 と NMEA を複数ファイル選択で渡す）。書き出しは Win/Mac 用。
+
+---
+
+## ドラレコ 走行ビューア（OBD 不要）
+
+**ドラレコの SD カードだけ**で走行を振り返る。OBD ドングルもスマホのログも要らない。
+**[dashcam.html](https://k4n4ch.github.io/fl4obd/dashcam.html)** を開き、SD カードのフォルダを渡すだけ。
+
+```
+┌──────────────────────────┬─────────────┐
+│                          │ リアカメラ   │
+│  前方カメラ 1280×720      ├─────────────┤
+│                          │ ナビ 640×360 │
+├──────────────────────────┼─────────────┤
+│ 標高/勾配・車速・前後左右G  │ 俯瞰 640×360 │
+│        1280×360          │             │
+└──────────────────────────┴─────────────┘
+```
+
+- **前後カメラの同期再生**、**地図（経路・現在位置）**、**車速**、**標高・勾配**、**前後左右G**。
+- 車速は GPS の位置差分から出す。OBD 車速との実測一致は**中央 0.5 km/h**（95% 1.6 km/h）。
+- 経路は車速で色分け（〜20 / 〜45 / 〜70 / 〜95 / 95+ km/h）。
+- **測位が途切れた区間は線を切る**。経路の補完はしないので、繋ぐと走っていない直線が描かれるため。
+- SD カードを丸ごと渡してよい。**15 分以上空いたら別の走行**として塊に分け、最も長い走行を自動で採る。
+- 時刻同期・セッション判定は `video.html` と同じ `video/sync.js` を使う。
+
+**対応機種**: Honda 純正ドラレコ（DRH-224SD / 08E30-PM5-C04A、JVCKENWOOD OEM）で検証。
+MP4 と同名の `.NMEA` を書く機種なら、機種判定を足せば流用できる。GPS を MP4 内に埋め込む
+方式の機種には未対応。
+
+**出せないもの**（OBD が要る → `video.html`）: パワー・SOC・電費・走行モード、
+トンネル等の測位途絶の経路補完。
 
 詳細・同期の仕組み・実装メモは **[video/README.md](video/README.md)** を参照。
 

@@ -598,7 +598,9 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   const { clips, dropped } = dedupeOverlaps(inputClips);
 
   const sessions = groupSessions(clips);
-  const obdSpan = obd.samples.length
+  // OBD は任意。無い場合はドラレコ単体（映像＋NMEA）の同期として成立する。
+  const hasObd = !!(obd && obd.samples && obd.samples.length);
+  const obdSpan = hasObd
     ? [obd.samples[0].t, obd.samples[obd.samples.length - 1].t]
     : [NaN, NaN];
   // OBD 区間と最も重なるセッションを選ぶ
@@ -616,16 +618,19 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   let session = sessions[0], bestOv = -1;
   for (const s of sessions) {
     const [a, b] = sessionSpan(s);
-    const ov = Math.min(b, obdSpan[1]) - Math.max(a, obdSpan[0]);
-    if (ov > bestOv) { bestOv = ov; session = s; }
+    // OBD が無ければ「最も長いセッション」を採る。選ぶ手掛かりが尺しかないため。
+    const score = hasObd ? Math.min(b, obdSpan[1]) - Math.max(a, obdSpan[0])
+                         : s.reduce((t, c) => t + c.duration, 0);
+    if (score > bestOv) { bestOv = score; session = s; }
   }
   const anchor = computeAnchor(session);
   const sessFixes = session.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t);
 
   // 基準（真値）: NMEA の位置差分速度と位置
   const refSpeed = speedFromPositions(sessFixes);
-  const { series: obdSpeed, source: obdSpeedSource } = obdSpeedSeries(obd);
-  const dObd = estimateOffset(obdSpeed, refSpeed, { moveThreshold: 5 });
+  const { series: obdSpeed, source: obdSpeedSource } = hasObd ? obdSpeedSeries(obd) : { series: [], source: 'なし' };
+  const dObd = hasObd ? estimateOffset(obdSpeed, refSpeed, { moveThreshold: 5 })
+                      : { ok: false, reason: 'OBDなし', delta: NaN, residual: NaN, n: 0 };
 
   let dGpx = { ok: false, reason: 'GPXなし', delta: NaN, residual: NaN, n: 0 };
   /*
@@ -679,11 +684,12 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
   // OBD をドラレコ時間軸へ載せた区間
   const obdShift = dObd.ok ? dObd.delta : 0;
   const obdStart = obdSpan[0] + obdShift, obdEnd = obdSpan[1] + obdShift;
-  const start = Math.max(videoStart, nmeaStart, obdStart);
-  const end = Math.min(videoEnd, nmeaEnd, obdEnd);
+  // OBD が無ければ共通区間は 映像∩NMEA
+  const start = hasObd ? Math.max(videoStart, nmeaStart, obdStart) : Math.max(videoStart, nmeaStart);
+  const end = hasObd ? Math.min(videoEnd, nmeaEnd, obdEnd) : Math.min(videoEnd, nmeaEnd);
 
   const warnings = [...notes];
-  if (!dObd.ok) warnings.push(`OBD↔NMEA オフセットが解けない（${dObd.reason}）。同期は信頼できない。`);
+  if (hasObd && !dObd.ok) warnings.push(`OBD↔NMEA オフセットが解けない（${dObd.reason}）。同期は信頼できない。`);
   if (gpx && gpx.length > 20 && !dGpx.ok) warnings.push('GPX↔NMEA オフセットが解けない。');
   if (prof.cVideoSource.startsWith('default')) warnings.push('cVideo が未校正（既定0、±0.6s）。GPS同期時計の撮影で確定できる。');
   const info = [];
@@ -703,8 +709,8 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
     else info.push(`時刻合わせを GPX で独立検証（車速由来と位置由来の差 ${gap.toFixed(2)}s）。`);
   }
   if (anchor.excluded.length) warnings.push(`アンカーから除外: ${anchor.excluded.slice(0, 5).map((e) => e.name).join(', ')}${anchor.excluded.length > 5 ? ` 他${anchor.excluded.length - 5}本` : ''}`);
-  if (Math.abs(obdShift) > 60) warnings.push(`スマホ時計オフセットが異常に大きい（${obdShift.toFixed(1)}s）。要確認。`);
-  if (!(end > start)) warnings.push('映像・NMEA・OBD の共通区間が存在しない。');
+  if (hasObd && Math.abs(obdShift) > 60) warnings.push(`スマホ時計オフセットが異常に大きい（${obdShift.toFixed(1)}s）。要確認。`);
+  if (!(end > start)) warnings.push(hasObd ? '映像・NMEA・OBD の共通区間が存在しない。' : '映像と NMEA の共通区間が存在しない。');
 
   return {
     generated: new Date().toISOString(),
@@ -729,9 +735,11 @@ export function buildManifest({ clips: inputClips, obd, gpx, profile = null, not
     coverage: {
       video: [videoStart, videoEnd],
       nmea: [nmeaStart, nmeaEnd],
-      obd: [obdStart, obdEnd],
+      obd: hasObd ? [obdStart, obdEnd] : null,
     },
-    data: { obdDids: obd.dids, obdStats: obd.stats, mapSource, nFixes: sessFixes.length, nObd: obd.samples.length, nGpx: gpx ? gpx.length : 0, nClipsInput: inputClips.length, nClipsDeduped: clips.length, nSessions: sessions.length },
+    data: { hasObd, obdDids: hasObd ? obd.dids : [], obdStats: hasObd ? obd.stats : null, mapSource,
+            nFixes: sessFixes.length, nObd: hasObd ? obd.samples.length : 0, nGpx: gpx ? gpx.length : 0,
+            nClipsInput: inputClips.length, nClipsDeduped: clips.length, nSessions: sessions.length },
     info,
     warnings,
   };
