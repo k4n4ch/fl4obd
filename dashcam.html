@@ -355,16 +355,24 @@ function trackAt(utc) {
 }
 /*
  * 経路の色。OBD が無いので走行モードでは塗れない。車速で段階的に色を変える。
- * 段は「止まる/市街地/流れる/幹線/高速」の 5 つ。連続グラデーションにすると
- * 区間が細切れになって Leaflet のポリライン数が跳ねるので段階にする。
+ * 区切りは日本の制限速度に合わせた丸い数字にする（30/60/80/100）。
+ * 連続グラデーションにすると区間が細切れになって Leaflet のポリライン数が跳ねるので段階にする。
+ * 色と太さは同じ表から引き、しきい値が二重管理にならないようにする。
  */
-const SPD_STEPS = [[0, '#4a6a80'], [20, '#4dd08a'], [45, '#ffd24a'], [70, '#ff9a44'], [95, '#ff5a5a']];
-function spdColor(v) {
-  let c = SPD_STEPS[0][1];
-  for (const [t, col] of SPD_STEPS) if (v >= t) c = col;
-  return c;
+const SPD_STEPS = [
+  { min:   0, col: '#4a6a80', w: 3 },   // 停止・渋滞
+  { min:  30, col: '#4dd08a', w: 3 },   // 市街地
+  { min:  60, col: '#ffd24a', w: 4 },   // 幹線
+  { min:  80, col: '#ff9a44', w: 4 },   // 自動車専用
+  { min: 100, col: '#ff5a5a', w: 5 },   // 高速巡航
+];
+function spdStep(v) {
+  let r = SPD_STEPS[0];
+  for (const s of SPD_STEPS) if (v >= s.min) r = s;
+  return r;
 }
-const spdWeight = (v) => (v >= 70 ? 5 : v >= 30 ? 4 : 3);
+const spdColor = (v) => spdStep(v).col;
+const spdWeight = (v) => spdStep(v).w;
 function buildMaps() {
   const pts = TRACK.map((p) => [p.lat, p.lon]);
   const meta = TRACK.map((p) => ({ spd: spdAt(p.t) }));
