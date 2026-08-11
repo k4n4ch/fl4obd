@@ -1061,7 +1061,8 @@ export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass =
 export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   const hasObd = !!(obdSamples && obdSamples.length);
   const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0,
-          mass = 1675, cda = 0.67, crr = 0.008, speedBand = [0.4, 1.6] } = opts;
+          mass = 1675, cda = 0.67, crr = 0.008, speedBand = [0.4, 1.6],
+          driveSpeed = [8, 140] } = opts;
   const [ia, ib] = gap;
   const speedAt = opts.speedAt || (hasObd ? makeSpeedAt(obdSamples, obdDelta) : null);
   const topts = { ...opts, speedAt };
@@ -1106,6 +1107,21 @@ export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
      * 幅を広めに取るのは、トンネル内の渋滞で実際に大きく落ちることがあるため。
      */
     const vAvg = (route.length / T) * 3.6;
+    /*
+     * まず絶対値で「走行として成立するか」を見る。両端の速度との比だけで判定していたら、
+     * **停車中の途絶で判定ごと無効になっていた**（両端が 0km/h だと基準が作れないため）。
+     * 実測でそれが牙を剥いた:
+     *   30秒の途絶に 3.568km の経路 → 428km/h  （駐車場で測位が飛んだ）
+     *   83分の途絶に 0.460km の経路 → 0.33km/h（駐車中。走っていない）
+     * 速すぎる側も遅すぎる側も、走行の補完としては成り立たない。
+     */
+    if (vAvg < driveSpeed[0] || vAvg > driveSpeed[1]) {
+      const why = vAvg > driveSpeed[1]
+        ? '経路探索が実際と違う道を返している'          // 速すぎる＝遠回りの経路を掴んでいる
+        : '走行ではなく停車中の測位途絶と思われる';      // 遅すぎる＝そもそも走っていない
+      return { ok: false, anchors: { A, B },
+               reason: `経路 ${(route.length / 1000).toFixed(2)}km を ${T.toFixed(0)}s で走る想定になり平均 ${vAvg.toFixed(0)}km/h。${why}` };
+    }
     const vEnd = [A.fix.spd, B.fix.spd].filter(Number.isFinite);
     const vRef = vEnd.length ? vEnd.reduce((a, b) => a + b, 0) / vEnd.length : NaN;
     if (Number.isFinite(vRef) && vRef > 5) {
