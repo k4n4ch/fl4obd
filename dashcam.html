@@ -359,17 +359,17 @@ function trackAt(utc) {
  * 連続グラデーションにすると区間が細切れになって Leaflet のポリライン数が跳ねるので段階にする。
  * 色と太さは同じ表から引き、しきい値が二重管理にならないようにする。
  */
+// 上限で書く。「30以下 / 60以下 / …」と読めるようにするため（切り替わりは 30→31）
 const SPD_STEPS = [
-  { min:   0, col: '#4a6a80', w: 3 },   // 停止・渋滞
-  { min:  30, col: '#4dd08a', w: 3 },   // 市街地
-  { min:  60, col: '#ffd24a', w: 4 },   // 幹線
-  { min:  80, col: '#ff9a44', w: 4 },   // 自動車専用
-  { min: 100, col: '#ff5a5a', w: 5 },   // 高速巡航
+  { max:  30, col: '#4a6a80', w: 3 },   // 停止・生活道路
+  { max:  60, col: '#4dd08a', w: 3 },   // 市街地
+  { max:  80, col: '#ffd24a', w: 4 },   // 幹線
+  { max: 100, col: '#ff9a44', w: 4 },   // 自動車専用
+  { max: Infinity, col: '#ff5a5a', w: 5 },   // 高速巡航
 ];
 function spdStep(v) {
-  let r = SPD_STEPS[0];
-  for (const s of SPD_STEPS) if (v >= s.min) r = s;
-  return r;
+  for (const s of SPD_STEPS) if (v <= s.max) return s;
+  return SPD_STEPS[SPD_STEPS.length - 1];
 }
 const spdColor = (v) => spdStep(v).col;
 const spdWeight = (v) => spdStep(v).w;
