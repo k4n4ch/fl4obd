@@ -489,6 +489,10 @@ export function dedupeOverlaps(clips, { overlapRatio = 0.5 } = {}) {
   const sorted = [...clips].sort(
     (a, b) => clipStart(a) - clipStart(b) || (a.channelRank ?? 0) - (b.channelRank ?? 0) || String(a.name).localeCompare(String(b.name))
   );
+  // 重複したときに残す方の優先順位: 長く覆っている → channelRank が小さい → 名前。
+  // 「先に来た方を残す」だと、EVENT の短い抜粋が本編を追い出す（下記）。
+  const better = (a, b) =>
+    a.duration - b.duration || (b.channelRank ?? 0) - (a.channelRank ?? 0) || String(b.name).localeCompare(String(a.name));
   const kept = [], dropped = [];
   for (const c of sorted) {
     const last = kept[kept.length - 1];
@@ -498,7 +502,12 @@ export function dedupeOverlaps(clips, { overlapRatio = 0.5 } = {}) {
     // 重複として捨て、その穴でセッションがさらに分断されていた。
     // 短い方の尺の半分を超えて重なる場合だけ重複とみなす。
     if (last && clipEnd(last) - clipStart(c) > overlapRatio * Math.min(c.duration, last.duration)) {
-      dropped.push(c); continue;
+      // EVENT/PARKING の抜粋は NORMAL 本編と部分的に重なる。開始が early というだけで
+      // 20秒の抜粋が120秒の本編を追い出すと、そこに穴が空いてセッションが分断される
+      // （実測 2026-08-10 05:52: EVENT 20s が NORMAL 120s を追い出し 108s の穴）。
+      if (better(c, last) > 0) { dropped.push(kept.pop()); kept.push(c); }
+      else dropped.push(c);
+      continue;
     }
     kept.push(c);
   }
@@ -526,12 +535,25 @@ export function groupSessions(clips, gapTol = 10) {
  * 残差の外れ値として自動的に除外する。
  */
 export function computeAnchor(session, { outlierTol = 1.5 } = {}) {
-  let acc = 0;
+  /*
+   * S0 は「連続動画の先頭からの秒」。尺を足すだけだと実際の録画の切れ目を表現できず、
+   * 切れ目より前のクリップの a が系統的にずれて、まとめて外れ値として捨てられる
+   * （実測 2026-08-10: 8s と 9s の切れ目があり、18本中14本が除外された）。
+   * creation_time の差が尺を超える分だけ S0 を進める。
+   * ただし creation_time は1秒分解能でジッタが実測 ±3s あるため、それ以下は詰めて扱う
+   * （連続区間内では尺の累積のままにして、ジッタを S0 に持ち込まない）。
+   */
+  const GAP_MIN = 3;
+  let acc = 0, prev = null;
   const rows = session.map((c) => {
-    const r = { clip: c, S0: acc, a: Number.isFinite(c.nmeaFirst) ? c.nmeaFirst - acc : NaN };
-    acc += c.duration;
-    return r;
+    if (prev) {
+      const g = c.creationTime - (prev.creationTime + prev.duration);
+      acc += prev.duration + (g > GAP_MIN ? g : 0);
+    }
+    prev = c;
+    return { clip: c, S0: acc, a: Number.isFinite(c.nmeaFirst) ? c.nmeaFirst - acc : NaN };
   });
+  const totalDuration = prev ? acc + prev.duration : 0;
   // 測位の無いクリップ（トンネル等）はアンカーの材料にならないが、S0 は尺で決まるので
   // セッションからは外さない。A さえ決まれば、測位が無くても正しい時刻に置ける。
   const withFix = rows.filter((r) => Number.isFinite(r.a));
@@ -547,7 +569,7 @@ export function computeAnchor(session, { outlierTol = 1.5 } = {}) {
   return {
     A, sd, sem: sd / Math.sqrt(Math.max(use.length, 1)),
     nUsed: use.length, excluded, noFix,
-    sessionDuration: acc,
+    sessionDuration: totalDuration,
     nmeaLead: median(leads),
     clips: rows.map((r) => ({ name: r.clip.name, S0: r.S0, duration: r.clip.duration })),
   };
