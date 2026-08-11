@@ -122,7 +122,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module">
-import { parseNmea, parseMp4Meta, buildManifest, makeTimeline, haversineMeters, speedFromPositions } from './video/sync.js';
+import { parseNmea, parseMp4Meta, buildManifest, makeTimeline, haversineMeters, speedFromPositions, fillTrackGaps } from './video/sync.js';
 import { drawGraph } from './lib/graph.js';
 import { TILE_STYLES } from './video/tilemap.js';   // 他は書き出し（canvas 描画）用だったので不要
 
@@ -133,7 +133,7 @@ const PRELOAD_SEC = 4;          // 次クリップの先読み開始（残り秒
 
 let MAN = null, TL = null, TRACK = [], CLIPS = new Map();   // name → {file, S0, duration}
 let clipOrder = [], winS0 = 0, winS1 = 0, S = 0, playing = false, rate = 1;
-let mapNav, mapOv, curNav, curOv, navPos = null, TMETA = [], GSNS = [], SPD = [];
+let mapNav, mapOv, curNav, curOv, navPos = null, TMETA = [], GSNS = [], SPD = [], SPD_EST = [], FILLS = [];
 let lastHudKey = null, lastGraphUtc = -1e9, perf = { n: 0, sum: 0, t: 0 };   // 描画スロットリングと計測
 let rearOn = true;   // リア映像の有効/無効（720p を2本同時にデコードするコストの切り分け用にも使う）
 let act = 0;                                                          // 0=vA, 1=vB
@@ -287,11 +287,21 @@ async function load(scan, sess) {
   TRACK = clips.flatMap((c) => c.fixes).sort((a, b) => a.t - b.t);
 
   /*
-   * 測位途絶（トンネル等）の補完は行わない。経路を復元するには車速の積分が要るが、
-   * トンネル内は GPS が使えないため NMEA からは速度が得られない。ドラレコの G センサを
-   * 積分する推測航法は分オーダーで発散するので代替にならない。トンネルは空白のまま。
-   * OBD 車速があれば補完できる（video.html を使う）。
+   * 測位途絶（トンネル等）の経路を OSM（OSRM）から補って地図に出す。
+   * 距離の配分は「経路長 ÷ 途絶時間の一定速度」。OBD 車速が無いので速度は測れないが、
+   * 総距離（経路長）と総時間（途絶時間）は分かるため、位置は復元できる。
+   * 標高・勾配は走行抵抗からの逆算が要るので復元しない（補完点の ele は null）。
    */
+  FILLS = [];
+  msg('測位途絶の経路を補完中…');
+  try {
+    const r = await fillTrackGaps(TRACK, [], {});      // OBD 無し
+    TRACK = r.fixes;
+    FILLS = r.reports;
+    console.log('[途絶補完]', r.reports.length + '箇所', r.reports,
+                '補完点', r.fixes.filter((f) => f.estimated).length);
+  } catch (e) { console.error('[途絶補完] 失敗', e); }
+  mark('途絶補完');
 
   // 前後左右G: ドラレコ内蔵IMU($GSENS 10Hz)。ドラレコ自身のNMEA由来なので既に映像と同一時間軸。
   // 単位は g（GPS由来の縦/横加速度と突合して確認: X=前後 r0.925 / Y=左右 r0.806、係数とも 1g=9.81 近傍）。
@@ -360,20 +370,22 @@ function buildMaps() {
   const draw = (map) => {
     /*
      * 白フチ → 本線。車速で色と太さを変える。
-     * **測位が途切れた区間では線を切る。** このアプリは経路の補完をしないので、
-     * 繋ぐと走っていない直線が描かれる（関越トンネルなら 11km の直線になる）。
+     * 補完区間（測位途絶を OSM の経路で埋めた部分）は破線・白フチ無しにして実測と区別する。
+     * 補完できなかった途絶では線を切る。繋ぐと走っていない直線が描かれるため。
      */
     let cur = null; const runs = [];
     for (let i = 0; i < pts.length; i++) {
-      const col = spdColor(meta[i].spd), w = spdWeight(meta[i].spd);
+      const col = spdColor(meta[i].spd), w = spdWeight(meta[i].spd), est = !!TRACK[i].estimated;
       const cut = i > 0 && TRACK[i].t - TRACK[i - 1].t > 10;
-      if (!cur || cut || cur.col !== col || cur.w !== w) {
+      if (!cur || cut || cur.col !== col || cur.w !== w || cur.est !== est) {
         if (cur && !cut) cur.pts.push(pts[i]);         // 色/太さの境界では線を切らない（1点重ねる）
-        cur = { col, w, pts: [pts[i]] }; runs.push(cur);
+        cur = { col, w, est, pts: [pts[i]] }; runs.push(cur);
       } else cur.pts.push(pts[i]);
     }
-    for (const r of runs) L.polyline(r.pts, { color: '#f4f8ff', weight: r.w + 3, opacity: .85, lineCap: 'round', interactive: false }).addTo(map);
-    for (const r of runs) L.polyline(r.pts, { color: r.col, weight: r.w, opacity: 1, lineCap: 'round', interactive: false }).addTo(map);
+    for (const r of runs) if (!r.est) L.polyline(r.pts, { color: '#f4f8ff', weight: r.w + 3, opacity: .85, lineCap: 'round', interactive: false }).addTo(map);
+    for (const r of runs) L.polyline(r.pts, Object.assign(
+      { color: r.col, weight: r.w, opacity: r.est ? 0.75 : 1, lineCap: 'round', interactive: false },
+      r.est ? { dashArray: '5 4' } : {})).addTo(map);
     L.circleMarker(pts[0], { radius: 6, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 1, weight: 1, interactive: false }).addTo(map);
     L.circleMarker(pts[pts.length - 1], { radius: 6, color: '#e74c3c', fillColor: '#e74c3c', fillOpacity: 1, weight: 1, interactive: false }).addTo(map);
     return L.circleMarker(pts[0], { radius: 8, color: '#fff', fillColor: '#4a9eff', fillOpacity: 1, weight: 3, interactive: false }).addTo(map);
@@ -402,9 +414,17 @@ function fmt(s) { s = Math.max(0, s); return String(Math.floor(s / 60)).padStart
 let GPANELS = null;
 const GRAPH_SPAN = 120;      // 表示幅[秒]（±60s）
 
-/** 車速は位置差分から出す。OBD 車速との実測一致は中央 0.5km/h（95% 1.6km/h）。 */
+/*
+ * 車速は位置差分から出す。OBD 車速との実測一致は中央 0.5km/h（95% 1.6km/h）。
+ * 補完区間では位置自体が仮定（一定速度で配分）なので、そこから出る速度も仮定値。
+ * 実測と同じ線で描かないよう、点ごとに区別できるフラグを一緒に作る。
+ */
 function buildSpeed() {
-  SPD = speedFromPositions(TRACK).map((q) => [q.t, q.v]);
+  const est = new Map();
+  for (const p of TRACK) if (p.estimated) est.set(p.t, true);
+  const q = speedFromPositions(TRACK);
+  SPD = q.map((x) => [x.t, x.v]);
+  SPD_EST = q.map((x) => est.has(x.t));
 }
 function spdAt(t) {
   if (!SPD.length) return 0;
@@ -462,13 +482,23 @@ function buildGraphSeries() {
     if (hi - lo < minSpan) { const c = (lo + hi) / 2; lo = c - minSpan / 2; hi = c + minSpan / 2; }
     return [lo, hi];
   };
+  // 再生位置が補完区間かどうか（凡例の注記用）
+  const estT = TRACK.filter((p) => p.estimated).map((p) => p.t);
+  const estAt = (t) => {
+    if (!estT.length) return false;
+    let lo = 0, hi = estT.length - 1;
+    if (t < estT[0] - 2 || t > estT[hi] + 2) return false;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (estT[m] <= t) lo = m; else hi = m; }
+    return Math.abs(estT[lo] - t) < 3 || Math.abs(estT[hi] - t) < 3;
+  };
   GPANELS = [
     { h: 120, yl: rangeOf(elePts, 30, 0.06), yr: rangeOf(gradPts, 8, 0.06), series: [
         { name: '標高', color: '#8fbf6f', pts: elePts, fill: true, fmt: (v) => v.toFixed(0) + 'm' },
         { name: '勾配', color: '#c98fef', axis: 'R', pts: gradPts, w: 1.3, fmt: (v) => v.toFixed(1) + '%' },
       ] },
-    { h: 120, minL: 40, zeroL: true, series: [
-        { name: '車速', color: '#e8f0f8', pts: SPD, fill: true, fmt: (v) => v.toFixed(0) + 'km/h' },
+    { h: 120, minL: 40, zeroL: true, flag: (t) => (estAt(t) ? '（推定）' : null), series: [
+        { name: '車速', color: '#e8f0f8', pts: SPD, fill: true,
+          segDash: (i) => (SPD_EST[i] ? '5 4' : null), fmt: (v) => v.toFixed(0) + 'km/h' },
       ] },
     // G は 0 を中心に対称にする。加速と減速を同じ物差しで見たい
     { h: 120, zero: true, symL: true, minL: 0.6, symR: true, minR: 0.6, series: [
@@ -658,9 +688,9 @@ async function startLoad(sess) {
     const notes = [];
     if (m.data.nFixes === 0) notes.push('測位データが無いため地図と標高は出ません');
     if (!(m.window.durationSec > 0)) notes.push('映像と測位の重なりがありません');
-    const est = TRACK.filter((p) => p.estimated).length;
-    const gaps = (() => { let n = 0; for (let i = 1; i < TRACK.length; i++) if (TRACK[i].t - TRACK[i - 1].t > 10) n++; return n; })();
-    if (gaps) notes.push(`測位が途切れた区間が ${gaps} 箇所あります（トンネル等。地図の線はそこで切れます）`);
+    const filled = FILLS.filter((q) => q.ok).length, failed = FILLS.filter((q) => !q.ok).length;
+    if (filled) notes.push(`測位が途切れた ${filled} 区間（トンネル等）を地図の道路形状から補いました（破線。標高・勾配は出ません）`);
+    if (failed) notes.push(`補えなかった途絶が ${failed} 箇所あります（地図の線はそこで切れます）`);
     $('warn').textContent = notes.join('  /  ');
     await seekTo(winS0, false);
     tick();

@@ -1050,35 +1050,82 @@ export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass =
  * 表示側で実測と区別できるようにすること。
  */
 export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
-  const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0, mass = 1675, cda = 0.67, crr = 0.008 } = opts;
+  const hasObd = !!(obdSamples && obdSamples.length);
+  const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0,
+          mass = 1675, cda = 0.67, crr = 0.008, speedBand = [0.4, 1.6] } = opts;
   const [ia, ib] = gap;
-  const speedAt = opts.speedAt || makeSpeedAt(obdSamples, obdDelta);
+  const speedAt = opts.speedAt || (hasObd ? makeSpeedAt(obdSamples, obdDelta) : null);
   const topts = { ...opts, speedAt };
   const A = trimAnchor(fixes, ia, 'tail', topts);
   const B = trimAnchor(fixes, ib, 'head', topts);
   if (!A.fix || !B.fix) return null;
   const before = fixes[Math.max(0, A.index - 5)], after = fixes[Math.min(fixes.length - 1, B.index + 5)];
   if (!before || !after) return null;
-
-  const dist = integrateDistance(obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp })), A.fix.t, B.fix.t);
-  if (!dist || dist.total < minGapMeters) return null;
+  const T = B.fix.t - A.fix.t;
+  if (!(T > 0)) return null;
 
   const route = await routeBetween(A.fix, B.fix, bearingDeg(before, A.fix), bearingDeg(B.fix, after), opts);
   if (!route.ok) return { ok: false, reason: route.reason, anchors: { A, B } };
+  if (route.length < minGapMeters) return null;
 
-  // 合格判定①: 経路長と車速積分が一致するか
-  const errPct = ((dist.total - route.length) / route.length) * 100;
-  if (Math.abs(errPct) > lengthTolPct) {
-    return { ok: false, reason: `経路長 ${(route.length / 1000).toFixed(2)}km と車速積分 ${(dist.total / 1000).toFixed(2)}km が ${errPct.toFixed(1)}% 乖離`, anchors: { A, B } };
+  /*
+   * 距離をどう時間に配分するか。
+   *
+   * OBD 車速があれば積分する。経路長との一致は実測 0.03〜0.20% で、これが合否判定にもなる。
+   *
+   * 無い場合は **経路長 ÷ 途絶時間の一定速度**にする。両端の GPS 速度を補間する手もあるが、
+   * 両端はトンネルの「外」で測った値で、それを内部全体の形として持ち込むのは情報の無い
+   * 区間への外挿になる。一定速度は「総距離と総時間だけ分かっている」という最小限の主張で
+   * 止まる。実測（関越 北行き 10.9km/401s）で両方式の位置差は最大 183m（全長の1.67%、
+   * 中央付近）で両端では一致する。この 183m が内部位置の不確かさの目安。
+   */
+  let series, distTotal, errPct = 0, bridged = 0;
+  if (hasObd) {
+    const d = integrateDistance(obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp })), A.fix.t, B.fix.t);
+    if (!d || d.total < minGapMeters) return null;
+    errPct = ((d.total - route.length) / route.length) * 100;
+    if (Math.abs(errPct) > lengthTolPct) {
+      return { ok: false, anchors: { A, B },
+               reason: `経路長 ${(route.length / 1000).toFixed(2)}km と車速積分 ${(d.total / 1000).toFixed(2)}km が ${errPct.toFixed(1)}% 乖離` };
+    }
+    series = d.series; distTotal = d.total; bridged = d.bridged;
+  } else {
+    /*
+     * 一定速度なので「経路長と仮定距離の一致」は恒等式になり検査にならない。
+     * 代わりに **含意される平均速度が両端の実測速度と釣り合うか**を見る。同じ検査の言い換えで、
+     * 反対車線にスナップした経路（実測 9.0km の区間に 25.5km）なら 229km/h になって落ちる。
+     * 幅を広めに取るのは、トンネル内の渋滞で実際に大きく落ちることがあるため。
+     */
+    const vAvg = (route.length / T) * 3.6;
+    const vEnd = [A.fix.spd, B.fix.spd].filter(Number.isFinite);
+    const vRef = vEnd.length ? vEnd.reduce((a, b) => a + b, 0) / vEnd.length : NaN;
+    if (Number.isFinite(vRef) && vRef > 5) {
+      const r = vAvg / vRef;
+      if (r < speedBand[0] || r > speedBand[1]) {
+        return { ok: false, anchors: { A, B },
+                 reason: `経路 ${(route.length / 1000).toFixed(2)}km を ${T.toFixed(0)}s で走る想定になり平均 ${vAvg.toFixed(0)}km/h。両端の実測 ${vRef.toFixed(0)}km/h と釣り合わない` };
+      }
+      errPct = (r - 1) * 100;
+    }
+    series = [];
+    for (let t = 0; t <= T; t += 1) series.push({ t: A.fix.t + t, d: (route.length * t) / T });
+    distTotal = route.length;
   }
 
-  const shifted = obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp, psys: x.psys }));
-  const ele = reconstructElevation(shifted, A.fix.t, B.fix.t, A.fix.ele, B.fix.ele, { mass, cda, crr });
+  /*
+   * 標高は OBD の駆動パワーが要る（走行抵抗から勾配を逆算する）。無ければ復元しない。
+   * 両端の標高を距離で按分する手もあるが、勾配が一定という無根拠な仮定を
+   * 実測と同じ線で見せることになるので採らない。補完点の標高は null にする。
+   */
+  const ele = hasObd
+    ? reconstructElevation(obdSamples.map((x) => ({ t: x.t + obdDelta, vsp: x.vsp, psys: x.psys })),
+                           A.fix.t, B.fix.t, A.fix.ele, B.fix.ele, { mass, cda, crr })
+    : null;
 
   // 累積距離 → 経路上の位置。距離は経路長に合わせて正規化する
-  const k = route.length / dist.total;
+  const k = route.length / distTotal;
   const pts = [];
-  for (const q of dist.series) {
+  for (const q of series) {
     const s = q.d * k;
     if (pts.length && s - pts[pts.length - 1]._s < stepMeters) continue;
     const p = alongRoute(route, s);
@@ -1086,14 +1133,19 @@ export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   }
   return {
     ok: true, pts, route, anchors: { A, B },
-    stats: { lengthKm: route.length / 1000, integratedKm: dist.total / 1000, errPct, wind: ele ? ele.wind : null,
-             bridgedSec: dist.bridged, droppedFixes: A.dropped.length + B.dropped.length },
+    stats: { lengthKm: route.length / 1000, integratedKm: distTotal / 1000, errPct, wind: ele ? ele.wind : null,
+             speedSource: hasObd ? 'OBD車速の積分' : '経路長÷途絶時間の一定速度',
+             bridgedSec: bridged, droppedFixes: A.dropped.length + B.dropped.length },
   };
 }
 
 /** トラック全体の途絶を埋める。実測点はそのまま、補完点は estimated:true が付く。 */
 export async function fillTrackGaps(fixes, obdSamples, opts = {}) {
-  const speedAt = makeSpeedAt(obdSamples, opts.obdDelta ?? 0);
+  // 位置の妥当性判定に使う参照速度。OBD が無ければ測位自身のドップラ速度を使う
+  // （位置とは別に測られているので、座標が凍った場合の検出に効く）。
+  const speedAt = (obdSamples && obdSamples.length)
+    ? makeSpeedAt(obdSamples, opts.obdDelta ?? 0)
+    : makeSpeedAt(fixes.filter((f) => Number.isFinite(f.spd)).map((f) => ({ t: f.t, vsp: f.spd })), 0);
   const gaps = findTrackGaps(fixes, opts.minGap ?? 10, speedAt, opts);
   const reports = [];
   const inserts = [];
