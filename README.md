@@ -13,6 +13,8 @@ ELM327 BLE ドングル経由で、アナログメーター表示・**i-MMD エ�
 
 ![走行動画 × テレメトリ](docs/screenshot-video.png)
 
+**書き出した動画の例 → <https://www.youtube.com/watch?v=E61_XJa7AmM>**
+
 ---
 
 ## 必要なもの
