@@ -99,7 +99,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
   }
 }
 
-/* VIEW TABS (ゲージ / フロー) */
+/* VIEW TABS (フロー / ゲージ) */
 .vtabs{display:flex;gap:5px;margin:2px 0 7px;}
 .vtab{flex:1;padding:7px;background:#0a1520;border:1px solid #1a2a3a;border-radius:7px;
   color:#2a5a7a;font-family:'Courier New',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;transition:all .15s;}
@@ -110,13 +110,13 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 <body>
 <div class="app">
 
-<!-- VIEW TABS: ゲージ / フロー -->
+<!-- VIEW TABS: フロー(既定) / ゲージ -->
 <div class="vtabs">
-  <button id="tabGauge" class="vtab active" onclick="setView('gauge')">◧ GAUGE</button>
-  <button id="tabFlow"  class="vtab" onclick="setView('flow')">⇄ FLOW</button>
+  <button id="tabFlow"  class="vtab active" onclick="setView('flow')">⇄ FLOW</button>
+  <button id="tabGauge" class="vtab" onclick="setView('gauge')">◧ GAUGE</button>
 </div>
 
-<div id="gaugeView">
+<div id="gaugeView" style="display:none;">
 <!-- 3x2 ANALOG METERS -->
 <div class="meters-grid">
 
@@ -270,7 +270,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 </div><!-- /gaugeView -->
 
 <!-- FLOW VIEW: エネルギーフロー図 (BAT/GEN/ENG/TRC) -->
-<div id="flowView" style="display:none;">
+<div id="flowView">
   <svg id="flowSvg" viewBox="0 0 380 600" width="380" height="600"></svg>
 </div>
 
@@ -634,7 +634,7 @@ function render() {
 }
 
 // ─── エネルギーフロー図 (BAT/GEN/ENG/TRC + 車輪) ───────────
-let currentView = 'gauge';
+let currentView = 'flow';          // 既定はフロー図。ゲージはタブ/スワイプで出すサブ表示
 function setView(v){
   currentView = v;
   document.getElementById('gaugeView').style.display = (v==='gauge')?'':'none';
@@ -643,10 +643,11 @@ function setView(v){
   document.getElementById('tabFlow').classList.toggle('active',  v==='flow');
   if (v==='flow') drawFlow();
 }
+drawFlow();   // 既定がフロー図なので、接続前でも初期値で描いておく（空の SVG を見せない）
 
-// ─── スワイプで GAUGE ⇄ FLOW 切替（タブと併用） ─────────────
+// ─── スワイプで FLOW ⇄ GAUGE 切替（タブと併用） ─────────────
 (function(){
-  const VIEWS = ['gauge','flow'];
+  const VIEWS = ['flow','gauge'];
   let x0=null, y0=null;
   function onStart(e){ const t=e.changedTouches[0]; x0=t.clientX; y0=t.clientY; }
   function onEnd(e){
@@ -655,7 +656,7 @@ function setView(v){
     x0=null;
     if(Math.abs(dx)<50 || Math.abs(dx)<Math.abs(dy)*1.2) return;  // 横方向の明確なスワイプのみ
     const i=VIEWS.indexOf(currentView);
-    const ni = dx<0 ? i+1 : i-1;                                  // 左スワイプ=次(FLOW), 右=前(GAUGE)
+    const ni = dx<0 ? i+1 : i-1;                                  // 左スワイプ=次(GAUGE), 右=前(FLOW)
     if(ni>=0 && ni<VIEWS.length && ni!==i) setView(VIEWS[ni]);
   }
   for(const id of ['gaugeView','flowView']){
