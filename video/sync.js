@@ -989,9 +989,15 @@ export function integrateDistance(samples, t0, t1, { maxHole = 30 } = {}) {
  *
  *   sinθ = ( P/v − ½ρ·CdA·(v−w)² ) / (m·g) − a/g − Crr      w = 追い風[m/s]
  *
- * 質量・CdA・Crr は GPS 標高が既知の区間で事前に適合する（m=1675kg, CdA=0.67,
- * Crr=0.008 で標高 RMS 4.74m）。区間ごとに解く自由度は**相対風速 w だけ**にして、
- * 出口標高へ閉合させる。
+ * 質量・CdA・Crr は GPS 標高が既知の区間で事前に適合する（m=1675kg, Crr=0.008 で
+ * 標高 RMS 4.74m）。区間ごとに解く自由度は**相対風速 w だけ**にして、出口標高へ閉合させる。
+ *
+ * **CdA = 0.64。** 当初 0.67 を固定値として使っていたが、その値には CdA 単独の同定根拠が
+ * 無かった。走行抵抗を車速の2乗で回帰して空気抵抗と転がり抵抗を分離すると 0.631
+ * （n=7968, r=0.94、質量を 1460〜1700kg で振っても 0.596〜0.643）。下の「開放路で 0.64」、
+ * および下の追い風 2.8〜3.4m/s との整合も 0.64 を指す。3通りの独立な推定が 0.63〜0.64 に
+ * 集まり 0.67 だけが外れたため 0.64 に統一した（2026-08-13）。
+ * 詳細は fl4-profile-simulator/docs/road-load-cda.md。
  *
  * **CdA を可変にしてはいけない。** CdA は形状の量で状況では変わらない。
  * 当初 CdA を自由度にしたところトンネル内で 0.50、開放路で 0.64 という値が出たが、
@@ -1025,7 +1031,7 @@ function integrateGrade(samples, t0, t1, { mass, cda, crr, wind = 0 }) {
 }
 
 /** 出口標高に閉合するよう相対風速を解く（単調なので二分法）。 */
-export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass = 1675, cda = 0.67, crr = 0.008, windRange = [-20, 20] } = {}) {
+export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass = 1675, cda = 0.64, crr = 0.008, windRange = [-20, 20] } = {}) {
   const dE = eleEnd - eleStart;
   let [lo, hi] = windRange;
   for (let k = 0; k < 60; k++) {
@@ -1061,7 +1067,7 @@ export function reconstructElevation(samples, t0, t1, eleStart, eleEnd, { mass =
 export async function fillOneGap(fixes, gap, obdSamples, opts = {}) {
   const hasObd = !!(obdSamples && obdSamples.length);
   const { minGapMeters = 100, lengthTolPct = 8, stepMeters = 25, obdDelta = 0,
-          mass = 1675, cda = 0.67, crr = 0.008, speedBand = [0.4, 1.6],
+          mass = 1675, cda = 0.64, crr = 0.008, speedBand = [0.4, 1.6],
           driveSpeed = [8, 140] } = opts;
   const [ia, ib] = gap;
   const speedAt = opts.speedAt || (hasObd ? makeSpeedAt(obdSamples, obdDelta) : null);
