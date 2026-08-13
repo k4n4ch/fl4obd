@@ -121,8 +121,10 @@ export function parseNmea(text) {
     const p = line.split(',');
     if (tag === '$GPGGA') {
       if (!nmeaChecksumOk(line)) continue;
-      const a = parseFloat(p[9]);
-      if (p[1] && p[6] !== '0') alt.set(p[1], { alt: isFinite(a) ? a : null, ns: +p[7], hdop: parseFloat(p[8]) });
+      const a = parseFloat(p[9]), sep = parseFloat(p[11]);
+      // p[11] は受信機が使ったジオイド高。標高の基準面を直すのに要る（applyGeoid 参照）
+      if (p[1] && p[6] !== '0') alt.set(p[1], { alt: isFinite(a) ? a : null, ns: +p[7],
+                                                hdop: parseFloat(p[8]), sep: isFinite(sep) ? sep : null });
     } else if (tag === '$GPRMC') {
       if (!nmeaChecksumOk(line)) continue;
       if (p.length < 10 || !p[1] || p[9].length !== 6) continue;
@@ -157,7 +159,7 @@ export function parseNmea(text) {
   // 標高を突合。$GPGGA が $GPRMC の前後どちらに来るかは機器依存なので、全部読んでから割り当てる
   for (const f of fixes) {
     const a = alt.get(f._tk);
-    if (a !== undefined) { f.ele = a.alt; f.ns = a.ns; f.hdop = a.hdop; }
+    if (a !== undefined) { f.ele = a.alt; f.ns = a.ns; f.hdop = a.hdop; f.sep = a.sep; }
     delete f._tk;
   }
   // $GSENS に時刻を割り当て（測位センテンス間を等分）
@@ -982,6 +984,59 @@ export function integrateDistance(samples, t0, t1, { maxHole = 30 } = {}) {
   const head = (s[0].t - t0) * (s[0].vsp / 3.6);
   const tail = (t1 - s[s.length - 1].t) * (s[s.length - 1].vsp / 3.6);
   return { series: out, total: d + head + tail, head, tail, bridged, n: s.length };
+}
+
+/*
+ * 標高の基準面を国土地理院の GSIGEO2011 に揃える。
+ *
+ * ドラレコ受信機が出す `$GPGGA` の標高は、受信機内蔵のジオイドモデルを基準にしている。
+ * このモデルが粗く、200km 走っても 37.7〜38.8m しか動かない（真のジオイド高は同区間で
+ * 41.8〜43.0m 変化する）。結果として標高が系統的に約 3.8m 高く出る。
+ *
+ * `$GPGGA` の 11番目に受信機が使ったジオイド高が入るので、楕円体高
+ * `h = 標高 + 受信機のジオイド高` を保存したまま `H = h − N_GSIGEO2011` を計算し直す。
+ * 実測（2026-08-10 の 202.9km、20点）で差は −3.82 ± 0.55m。ほぼ定数なので、
+ * 数点だけ照会して平均を引けば足りる。
+ *
+ * これで平地区間の DEM とのオフセットが −6.06 → −2.24m（Copernicus）、
+ * −5.12 → −1.30m（国土地理院レーザ）まで縮む。
+ *
+ * 補正量は勾配を持たないので、走行抵抗からの標高復元（閉合する）や消費エネルギーには
+ * ほとんど効かない。効くのは標高の絶対値と、DEM や他機器との比較。
+ *
+ * 日本国外では国土地理院の API が値を返さないので、補正せず理由を返す。
+ */
+export async function applyGeoid(fixes, { samples = 8, onProgress } = {}) {
+  const cand = fixes.filter((f) => f.ele != null && f.sep != null && !f.estimated);
+  if (cand.length < 2) return { ok: false, why: 'ジオイド高を持つ測位点が無い（$GPGGA 11番目が空）' };
+  const step = Math.max(1, Math.floor(cand.length / samples));
+  const picks = [];
+  for (let i = 0; i < cand.length && picks.length < samples; i += step) picks.push(cand[i]);
+
+  const diffs = [];
+  for (const f of picks) {
+    onProgress && onProgress(`ジオイド高を照会中… ${diffs.length + 1}/${picks.length}`);
+    const u = 'https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh/cgi/geoidcalc.pl' +
+              `?outputType=json&latitude=${f.lat.toFixed(6)}&longitude=${f.lon.toFixed(6)}`;
+    // 国土地理院の API は断続的に落ちるので数回試す（点数が減ると平均が荒れる）
+    for (let k = 0; k < 3; k++) {
+      try {
+        const r = await fetch(u);
+        if (r.ok) {
+          const g = parseFloat(((await r.json()) || {}).OutputData?.geoidHeight);
+          if (isFinite(g)) { diffs.push(f.sep - g); break; }   // 受信機のジオイド高 − 真のジオイド高
+        }
+      } catch (e) { /* 次の試行へ */ }
+      await new Promise((x) => setTimeout(x, 600));
+    }
+    await new Promise((x) => setTimeout(x, 250));    // 公共APIなので間隔を空ける
+  }
+  if (diffs.length < 3) return { ok: false, why: `ジオイド高を取得できたのが ${diffs.length}点（日本国外か API 不通）` };
+
+  const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  const sd = Math.sqrt(diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / diffs.length);
+  for (const f of fixes) if (f.ele != null) f.ele -= mean;
+  return { ok: true, offset: mean, sd, n: diffs.length };
 }
 
 /*

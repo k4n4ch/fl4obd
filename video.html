@@ -147,7 +147,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="lib/flow.js"></script>
 <script type="module">
-import { parseNmea, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, haversineMeters, fillTrackGaps } from './video/sync.js';
+import { parseNmea, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, haversineMeters, fillTrackGaps, applyGeoid } from './video/sync.js';
 import { drawGraph } from './lib/graph.js';
 import { TileCache, makeView, fitView, zoomForSpan, drawTiles, drawRoute, drawDot, visibleRange, TILE_STYLES, drawAttribution } from './video/tilemap.js';
 
@@ -308,6 +308,9 @@ async function load(entries, txtFile) {
   msg('測位途絶を補完中…');
   try {
     const dObdFill = MAN.offsets.obd.ok ? MAN.offsets.obd.delta : 0;
+    const gz = await applyGeoid(TRACK, { onProgress: (m) => stat && stat(m) });
+    if (gz.ok) console.log(`ジオイド補正 ${gz.offset >= 0 ? "−" : "+"}${Math.abs(gz.offset).toFixed(2)}m（sd ${gz.sd.toFixed(2)}、${gz.n}点）`);
+    else console.warn('ジオイド補正 見送り:', gz.why);
     const r = await fillTrackGaps(TRACK, obd.samples, { obdDelta: dObdFill });
     TRACK = r.fixes;
     FILLS = r.reports;

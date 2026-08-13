@@ -11,7 +11,7 @@
  */
 import { readFile, readdir, stat, open, writeFile } from 'node:fs/promises';
 import { join, extname, basename, dirname } from 'node:path';
-import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, fillTrackGaps } from './sync.js';
+import { parseNmea, parseGpx, parseObdLog, parseMp4Meta, buildManifest, makeTimeline, deriveTelemetry, fillTrackGaps, applyGeoid } from './sync.js';
 
 function args() {
   const a = process.argv.slice(2), o = {};
@@ -102,6 +102,10 @@ if (m.warnings.length) console.log('\n警告:\n' + m.warnings.map((w) => '  - ' 
     ? gpx.map((p) => ({ t: p.t + dGpx, lat: p.lat, lon: p.lon, ele: p.ele }))
     : S.clips.flatMap((c) => (clips.find((x) => x.name === c.name) || { fixes: [] }).fixes).sort((a, b) => a.t - b.t);
   deriveTelemetry(obd);
+  // 標高の基準面を揃える。途絶補完の前に当てる（復元の端点標高が補正後になるように）
+  const gz = await applyGeoid(track);
+  console.log(gz.ok ? `\nジオイド補正: ${gz.offset >= 0 ? "−" : "+"}${Math.abs(gz.offset).toFixed(2)}m（sd ${gz.sd.toFixed(2)}、${gz.n}点）`
+                    : `\nジオイド補正: 見送り（${gz.why}）`);
   const r = await fillTrackGaps(track, obd.samples, { obdDelta: m.offsets.obd.ok ? m.offsets.obd.delta : 0 });
   console.log(`\n測位途絶の補完 (${useGpx ? 'GPX' : 'NMEA'}): ${r.reports.length}箇所`);
   for (const q of r.reports) {
