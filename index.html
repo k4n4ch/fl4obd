@@ -1041,13 +1041,29 @@ const CMD_2920 = '222920';
 const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
 const SOC_INTERVAL = 30000;    // ms  SOCは30秒毎に間引き(∫Pbat内挿で~0.6%精度, 枠を2920に回す)
 const V12_INTERVAL = 10000;    // ms  12Vも同様
-// 燃料タンク残量(012F)は TA=0x10 でしか返らないため、前後にヘッダー切替を挟む。
-// 戻りは ATSH と ATFCSH を対で発行する（片方だけだと 222920 が死ぬ。下の注記参照）。
-// 4コマンド×約0.1s を消費するので低頻度で回す。分解能 100/255=0.39%(40L 換算 0.16L)
-// の粗い信号で、変化も遅いため 60秒で足りる。
-const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)
-const HDR_FUEL = '18DAF110';   // 012F 用
-const FUEL_INTERVAL = 60000;   // ms
+const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)。実測でこれで応答している
+const FUEL_INTERVAL = 0;       // 0 = 定期取得を止める。ヘッダーが確定するまで撃たない
+
+/*
+ * ── ATSH の解釈を実測する診断シーケンス（接続ごとに1回）─────────────
+ *
+ * アプリは 2920 を ATSH18DAF107 で取れている。一方ファーム側の規約は
+ *   pico/fl4-obd-logger: makeId(ta,sa) = 0x18DA0000 | ta<<8 | sa
+ *   → DID(TA 0x07) のリクエストIDは 0x18DA07F1
+ * で、TA と SA が逆。ELM327 の ATSH がどちらの並びを受けているのかが未確定で、
+ * ここが分からないまま TA 0x10 のヘッダーを決めたので 012F が NO DATA になった。
+ *
+ * そこで「既に取れている 222920」を物差しにして両方の並びを試す。2920 が
+ * どちらで返るかで ATSH の解釈が確定し、同じ並びを TA 0x10 に適用できる。
+ * ATFCSH は毎回 ATSH と同じ値に揃える（マルチフレームの FC 先を一致させる）。
+ */
+const PROBE = [
+  'ATSH18DA07F1', 'ATFCSH18DA07F1', '222920',   // ファーム規約 × 既知の対象
+  'ATSH18DAF107', 'ATFCSH18DAF107', '222920',   // アプリ規約   × 既知の対象（復帰確認）
+  'ATSH18DA10F1', 'ATFCSH18DA10F1', '012F',     // ファーム規約 × 目的(TA 0x10)
+  'ATSH18DAF110', 'ATFCSH18DAF110', '012F',     // アプリ規約   × 目的(TA 0x10)
+  'ATSH' + HDR_MAIN, 'ATFCSH' + HDR_MAIN,       // 常用へ復帰
+];
 
 let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
 let cmdSeq = [];               // 割り込ませる連続コマンド列（ヘッダー切替を伴うもの）
@@ -1056,7 +1072,8 @@ function buildCmdQueue() {
   // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
   const now = Date.now();
   last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
-  cmdSeq = [];                 // 再接続時に前回の切替途中が残らないようにする
+  cmdSeq = PROBE.slice();      // 診断を先頭に置く。終われば通常ポーリングに落ちる
+  log('--- ATSH 診断 開始 ---', 'tx');
 }
 
 function sendNextPid() {
@@ -1068,15 +1085,7 @@ function sendNextPid() {
   // 切替途中の列を最優先で出し切る。ここを飛ばすとヘッダーが 0x10 のまま 2920 を撃つ
   if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
   else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
-  else if (now - lastFuel >= FUEL_INTERVAL) {
-    lastFuel = now;
-    cmd = 'ATSH' + HDR_FUEL;
-    // ATSH を変えるとフローコントロール設定が失われる。ATFCSH を対で戻さないと
-    // マルチフレームの 222920 だけが死ぬ（015B は単一フレームなので生き残り、
-    // 症状が「5B以外読めない」になる）。docs/設計仕様書.md:74-75 の手順と同じ。
-    // 012F が無応答でもこの列は最後まで出るのでヘッダーは必ず戻る。
-    cmdSeq = ['012F', 'ATSH' + HDR_MAIN, 'ATFCSH' + HDR_MAIN];
-  }
+  // FUEL_INTERVAL=0 の間は定期取得しない（診断でヘッダーが確定するまで）
   // 0142(12V)ポーリングは廃止: 12Vは 2920 byte14 で高レート取得(parse22_2920)
   else {
     // 2920 ホットループ + 100ms下限ガード
