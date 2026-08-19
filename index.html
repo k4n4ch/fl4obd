@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260819b';
+const APP_VER = 'v20260819c';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -553,9 +553,10 @@ initCenterMark('centerPsys');
 
 // ─── Vehicle data ─────────────────────────────────────────
 // D は lib/flow.js が宣言する（drawFlow が参照する現在値）。ここでは初期値を入れるだけ。
-// fuelShow: 012F をポーリングするのはこのアプリだけなので、枠を出すのもここだけ。
-// リプレイ/動画は D.fuelLvl を持たないため何も描かれない。
-Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1, fuelShow:true });
+// fuelShow: 012F は ATSH でヘッダーを切り替えないと取れず、この ELM327 では
+// 切替そのものが成立しない（ポーリング部の注記を参照）。取得手段が無いので
+// 枠を出さない。切替が可能になったら true に戻せば描画側はそのまま動く。
+Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1, fuelShow:false });
 // off90(bit720) = gen_trq(発電機トルク, 生信号)。2920単独で独立に物理換算する。
 // ENG-GEN同軸ゆえ定常の torque balance 比例部分: eng_trq_Nm ≈ gen_trq_Nm。
 // 走行ログ散布図(eng_trq vs gen_trq)の比例係数 |gen_trq|/eng_trq ≈ 0.535 と
@@ -1051,49 +1052,42 @@ async function sendRaw(s) {
 //   222920 … 全ゲージ(Vsp/Psys/Peng/Pbat/ENGrpm/RunMode)。可能な限り高速、ただし100ms下限ガード
 //   015B   … SOC   1秒ごとに1回だけ差し込む
 //   0142   … 12V   5秒ごとに1回だけ差し込む
-//   012F   … 燃料タンク残量。TA=0x10 でしか応答しないのでヘッダー切替を挟んで60秒ごと
+//   012F   … 燃料タンク残量。ヘッダー切替が必要だが不可（下の注記）。未取得
 const CMD_2920 = '222920';
 const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
 const SOC_INTERVAL = 30000;    // ms  SOCは30秒毎に間引き(∫Pbat内挿で~0.6%精度, 枠を2920に回す)
 const V12_INTERVAL = 10000;    // ms  12Vも同様
 const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)。実測でこれで応答している
-const FUEL_INTERVAL = 0;       // 0 = 定期取得を止める。ヘッダーが確定するまで撃たない
 
 /*
- * ── 診断シーケンス 第2版（接続ごとに1回）─────────────────────────
+ * ── ヘッダー切替は使えない（2026-08-19 実測）───────────────────────
  *
- * 第1版(v20260819a)の結果:
- *   ・011F は返る（車も ELM327 も生きている）
- *   ・ATSH を元の 18DAF107 に戻しても 222920 は NO DATA のまま
- *   ・015B まで NO DATA。単一フレームも死ぬのでフローコントロールの話ではない
- *   ・SEARCHING は初回だけ。プロトコル再探索もしていない
- * → ヘッダーの「値」ではなく、初期化後に ATSH を触ること自体が疑わしい。
+ * 燃料タンク残量(012F)は TA 0x10 でしか応答しないので ATSH で切り替えて
+ * 取ろうとしたが、この ELM327 v2.1 では成立しない。
  *
- * ただし第1版には穴があった。ATSH に触る前に 222920 を一度も撃っていないので
- * 「触る前は返っていた」という前提を確かめていない。まずそこを埋める。
+ * 診断ログ fl4obd_2026-08-19T13-42-12.txt:
+ *   222920                     → 正常応答（ベースライン）
+ *   ATSH18DAF107（初期化と同じ値）→ OK
+ *   222920                     → NO DATA        ← ここで死ぬ
+ *   ATSH/ATFCSH/ATFCSD/ATFCSM1 を4本そろえて再アーム → 戻らない
+ *   015B も NO DATA。以降 68回すべて NO DATA で切断まで復帰しない
  *
- * 再アームは初期化と同じ4本(ATSH/ATFCSH/ATFCSD/ATFCSM1)を毎回そろえて出す。
- * 第1版は ATSH と ATFCSH の2本だけで、ATFCSD と ATFCSM1 を送っていなかった。
+ * **同じ値の ATSH を再発行しただけで死ぬ**ので、ヘッダーの値も TA/SA の並びも
+ * フローコントロールも原因ではない。初期化(ATSP0 の探索完了)後に ATSH を
+ * 受け付けないアダプタ、という結論。
+ *
+ * 未検証で残っている可能性は2つ。やるならこの2つ。
+ *   ・ATSH 後の待ち時間。初期化では 300ms 空けているが診断では 2ms で撃った
+ *   ・ATZ からの完全再初期化を挟めば復帰するか（探索が走るので数秒かかる）
+ * 詳細は embedded/knowledge/hw-gotchas.md の「ELM327 の ATSH」を参照。
  */
-const FC_ARM = h => ['ATSH' + h, 'ATFCSH' + h, 'ATFCSD300000', 'ATFCSM1'];
-const PROBE = [
-  '222920',                                  // A: 無変更のベースライン。ここが返るかが起点
-  'ATSH' + HDR_MAIN, '222920',               // B: 同じ値の ATSH 再発行だけで壊れるか
-  ...FC_ARM(HDR_MAIN), '222920',             // C: 4本そろえて再アームすれば戻るか
-  ...FC_ARM('18DA10F1'), '012F',             // D : TA 0x10 ファーム規約
-  ...FC_ARM('18DAF110'), '012F',             // D': TA 0x10 アプリ規約
-  ...FC_ARM(HDR_MAIN),                       // E: 常用へ復帰
-];
 
-let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
-let cmdSeq = [];               // 割り込ませる連続コマンド列（ヘッダー切替を伴うもの）
+let last2920 = 0, lastSoc = 0, lastV12 = 0;
 
 function buildCmdQueue() {
   // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
   const now = Date.now();
-  last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
-  cmdSeq = PROBE.slice();      // 診断を先頭に置く。終われば通常ポーリングに落ちる
-  log('--- ATSH 診断 開始 ---', 'tx');
+  last2920 = 0; lastSoc = 0; lastV12 = 0;
 }
 
 function sendNextPid() {
@@ -1102,10 +1096,7 @@ function sendNextPid() {
   clearTimeout(pollWatchdog);
   const now = Date.now();
   let cmd;
-  // 切替途中の列を最優先で出し切る。ここを飛ばすとヘッダーが 0x10 のまま 2920 を撃つ
-  if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
-  else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
-  // FUEL_INTERVAL=0 の間は定期取得しない（診断でヘッダーが確定するまで）
+  if (now - lastSoc >= SOC_INTERVAL)      { cmd = '015B'; lastSoc = now; }
   // 0142(12V)ポーリングは廃止: 12Vは 2920 byte14 で高レート取得(parse22_2920)
   else {
     // 2920 ホットループ + 100ms下限ガード
