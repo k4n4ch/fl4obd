@@ -933,22 +933,51 @@ function onRx(evt) {
   }
 }
 // ─── Screen Wake Lock ────────────────────────────────────
+// 記録中に画面が消えるとページが hidden になり、JS のタイマーごと凍結する。
+// 実測（2026-08-17〜19 の 6走行中 3走行）で 20〜46秒の凍結が起き、その間は
+// pollWatchdog(1500ms) すら発火していなかった＝ストール検出でも拾えない。
+// 取得の成否と解除をログに残す。logBuffer に入るので保存ログから後追いできる。
 let wakeLock = null;
+let wakeRetryAt = 0;       // 解除→再取得の暴走防止（最短間隔）
 
 async function requestWakeLock() {
-  if (!('wakeLock' in navigator)) return;
+  if (!('wakeLock' in navigator)) { log('画面ロック: 非対応ブラウザ', 'e'); return; }
+  if (wakeLock) return;    // 保持中。取り直すと古い参照を捨てて解放できなくなる
   try {
-    wakeLock = await navigator.wakeLock.request('screen');
-  } catch(e) {}
+    const wl = await navigator.wakeLock.request('screen');
+    wakeLock = wl;
+    // OS 都合の解除（画面消灯・タブ切替・省電力）を拾う。
+    // visibilitychange だけでは「可視のまま剥がされた」場合を取りこぼす。
+    wl.addEventListener('release', () => {
+      if (wakeLock === wl) wakeLock = null;
+      log('画面ロック 解除', 'e');
+      if (document.visibilityState === 'visible' && connected && Date.now() >= wakeRetryAt) {
+        wakeRetryAt = Date.now() + 2000;
+        requestWakeLock();
+      }
+    });
+    log('画面ロック 取得', 'ok');
+  } catch (e) {
+    wakeLock = null;
+    log('画面ロック 取得失敗: ' + e.name + ' / ' + e.message, 'e');
+  }
 }
 
 function releaseWakeLock() {
-  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  if (!wakeLock) return;
+  const wl = wakeLock;
+  wakeLock = null;         // release() の完了前に再入しても二重にならないよう先に落とす
+  wl.release().catch(() => {});
 }
 
 // ページが再表示されたとき（通知バーを開けて戻るなど）に再取得
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible') {
+    // 凍結の開始点を記録しておく。これが無いとログが理由なく途切れて見える
+    log('ページ非表示（画面消灯/バックグラウンド）', 'e');
+    return;
+  }
+  log('ページ再表示', 'ok');
   requestWakeLock();                       // 非表示中に解放されたウェイクロックを再取得
   if (reconnecting || !connected) return;  // 再接続中/未接続はそれぞれの処理に委ねる
   // バックグラウンドでスロットルされ停止したポーリングを明示的に再始動。
@@ -1231,7 +1260,9 @@ async function attemptReconnect() {
   connected = false;
   clearTimeout(pollWatchdog);
   awaiting = false;
-  releaseWakeLock();
+  // ウェイクロックは手放さない。再接続ループは成功するまで無限に回るため、
+  // ここで解放するとトンネル等の切断中ずっと画面が消せる状態になる。
+  // 画面が消えれば JS が凍結し、再接続そのものが止まる。
   setUI('rec');
   let delay = 1000;
   while (!userDisc && bleDevice) {
