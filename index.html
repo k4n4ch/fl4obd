@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260819e';
+const APP_VER = 'v20260819f';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -553,10 +553,9 @@ initCenterMark('centerPsys');
 
 // ─── Vehicle data ─────────────────────────────────────────
 // D は lib/flow.js が宣言する（drawFlow が参照する現在値）。ここでは初期値を入れるだけ。
-// fuelShow: 012F は ATSH でヘッダーを切り替えないと取れず、この ELM327 では
-// 切替そのものが成立しない（ポーリング部の注記を参照）。取得手段が無いので
-// 枠を出さない。切替が可能になったら true に戻せば描画側はそのまま動く。
-Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1, fuelShow:false });
+// fuelShow: 012F を取りにいくのはこのアプリだけなので、枠を出すのもここだけ。
+// リプレイ/動画は D.fuelLvl を持たないため何も描かれない。
+Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1, fuelShow:true });
 // off90(bit720) = gen_trq(発電機トルク, 生信号)。2920単独で独立に物理換算する。
 // ENG-GEN同軸ゆえ定常の torque balance 比例部分: eng_trq_Nm ≈ gen_trq_Nm。
 // 走行ログ散布図(eng_trq vs gen_trq)の比例係数 |gen_trq|/eng_trq ≈ 0.535 と
@@ -1052,7 +1051,7 @@ async function sendRaw(s) {
 //   222920 … 全ゲージ(Vsp/Psys/Peng/Pbat/ENGrpm/RunMode)。可能な限り高速、ただし100ms下限ガード
 //   015B   … SOC   1秒ごとに1回だけ差し込む
 //   0142   … 12V   5秒ごとに1回だけ差し込む
-//   012F   … 燃料タンク残量。ヘッダー切替が必要だが不可（下の注記）。未取得
+//   012F   … 燃料タンク残量。ECU 0x10 のみ応答。受信フィルタを切り替えて60秒ごと
 const CMD_2920 = '222920';
 const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
 const SOC_INTERVAL = 30000;    // ms  SOCは30秒毎に間引き(∫Pbat内挿で~0.6%精度, 枠を2920に回す)
@@ -1060,9 +1059,29 @@ const V12_INTERVAL = 10000;    // ms  12Vも同様
 const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)。実測でこれで応答している
 
 /*
- * ── 診断シーケンス 第3版（接続ごとに1回）─────────────────────────
+ * ── TA の読み分けは ATCRA（受信フィルタ）で行う。ATSH は使わない ──────
  *
- * ELM327 データシート(ELM327DSJ)を読んで前提が変わった。
+ * 燃料タンク残量(PID 012F)は ECU 0x10 しか応答しない。ヘッダーを ATSH で
+ * 切り替えて取ろうとして 2 日溶かしたが、**送信側は触る必要が無かった**。
+ *
+ * ATSP0(全自動)では要求がファンクショナルアドレスで出るため、全 ECU に届く。
+ * ELM327 は "actually retrieves every message from the CAN bus, and then
+ * decides whether or not to display it" なので、**どの応答を表示するかを
+ * ATCRA で選ぶだけ**でよい。ATCRA(引数なし)で既定に戻る。
+ *
+ *   ATCRA18DAF110 → 012F → ATCRA     ← これだけ。0.35s / 回
+ *
+ * 実測 fl4obd_2026-08-19T14-08-19.txt(v20260819e):
+ *   222920                → 正常（ベースライン）
+ *   ATCRA18DAF107 → 222920 / 015B → いずれも正常   受信フィルタは無害
+ *   ATCRA18DAF110 → 012F  → 412FE755555555 = 90.6%(231/255)
+ *   ATCRA         → 222920 / 015B → 正常            完全復帰
+ *
+ * 逆に ATSH は、明示的に送った時点で以降すべて NO DATA になり切断まで戻らない。
+ * 仕様どおりの要求 ID (ATSH18DA07F1 + ATFCSH18DA07F1 + ATCRA18DAF107) でも
+ * 落ちた(v20260819d)。理由は未解明。**触らないこと。**
+ *
+ * 以下は調査中に読んだデータシートの該当箇所。ATSH に手を出す前に読むこと。
  *
  * ① ATSH のバイトの役割:
  *      "xx will be used for the first or priority/type byte, yy will be used
@@ -1078,43 +1097,26 @@ const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)。実測でこれで応�
  *      "the ELM327 actually retrieves every message from the CAN bus, and then
  *       decides whether or not to display it"
  *
- * ③ なぜ誤ったヘッダーで動いていたか:
+ * ③ 初期化時の ATSH がなぜ無害だったか:
  *      "If new values for header bytes are set before the vehicle protocol has
  *       been determined, and if the search is not set for fully automatic
  *       (ie other than protocol 0), these new values will be used"
- *    → ATSP0(全自動)なので初期化時の ATSH は使われず、探索は既定ヘッダーで
- *      走る。011F に複数行返るのもデータシートに例がある（複数 ECU 応答）。
- *      探索完了後に明示的に ATSH を送ると、そこから実際にその値が使われ、
- *      誤った宛先なので誰も応答しない = 2026-08-19 の NO DATA 68連発。
- *      「ATSH が使えない」のではなく「値が間違っていた」。
- *
- * ④ 第3版(v20260819d)の結果: 仕様どおりの ATSH18DA07F1 + ATFCSH18DA07F1 +
- *    ATCRA18DAF107 でも 222920 / 015B とも NO DATA。ベースラインは正常応答。
- *    → 並びの誤りは原因の一部でしかなく、ATSH を明示的に送ること自体で落ちる。
- *
- * そこで第4版は **ATSH に一切触らない**。ATSP0 の既定ヘッダー(ファンクショナル)
- * のまま要求は全 ECU に届いているはずなので、届いた応答のどれを表示するかを
- * ATCRA だけで選ぶ。データシートいわく ELM327 はバス上の全メッセージを取得し、
- * 表示するかどうかをフィルタで決めているだけなので、受信側だけ動かせば足りる。
- *
- * ATCRA(引数なし)は受信フィルタを既定へ戻す。B が落ちなければ何も壊れない。
+ *    → ATSP0(全自動)なので初期化時の ATSH18DAF107 は使われず、探索も以降の
+ *      通信も既定ヘッダーで走っていた。011F に複数行返るのもデータシートに
+ *      例がある。初期化の ATSH/ATFCSH は事実上の飾りで、外しても動くはず
+ *      （未確認なので残してある）。
  */
-const PROBE = [
-  '222920',                                  // A: ATSH 未使用のベースライン
-  'ATCRA18DAF107', '222920', '015B',         // B: 受信フィルタだけ絞る。生きるか ★本命
-  'ATCRA18DAF110', '012F',                   // C: ECU 0x10 の応答だけ見る
-  'ATCRA', '222920', '015B',                 // D: フィルタ解除して復帰
-];
+const CRA_FUEL = '18DAF110';   // ECU 0x10 → テスタ F1 の応答だけを通す
+const FUEL_INTERVAL = 60000;   // ms  分解能 0.39%(40L 換算 0.16L)で変化も遅い
 
-let last2920 = 0, lastSoc = 0, lastV12 = 0;
+let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
 let cmdSeq = [];               // 先頭から順に出し切る割り込みコマンド列
 
 function buildCmdQueue() {
   // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
   const now = Date.now();
-  last2920 = 0; lastSoc = 0; lastV12 = 0;
-  cmdSeq = PROBE.slice();
-  log('--- ヘッダー診断 開始 ---', 'tx');
+  last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
+  cmdSeq = [];                 // 再接続時に受信フィルタ切替の途中が残らないようにする
 }
 
 function sendNextPid() {
@@ -1123,9 +1125,15 @@ function sendNextPid() {
   clearTimeout(pollWatchdog);
   const now = Date.now();
   let cmd;
-  // 診断の列は最優先で出し切る。途中で割り込むとヘッダーが中途半端な状態で撃つ
+  // 受信フィルタ切替の列は最優先で出し切る。途中で割り込むと 2920 の応答を
+  // ECU 0x10 のフィルタで捨てることになる
   if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
   else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
+  else if (now - lastFuel >= FUEL_INTERVAL) {
+    lastFuel = now;
+    cmd = 'ATCRA' + CRA_FUEL;
+    cmdSeq = ['012F', 'ATCRA'];   // 012F が無応答でも最後の ATCRA で既定へ戻る
+  }
   // 0142(12V)ポーリングは廃止: 12Vは 2920 byte14 で高レート取得(parse22_2920)
   else {
     // 2920 ホットループ + 100ms下限ガード
