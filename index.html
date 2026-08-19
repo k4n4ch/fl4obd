@@ -538,7 +538,9 @@ initCenterMark('centerPsys');
 
 // ─── Vehicle data ─────────────────────────────────────────
 // D は lib/flow.js が宣言する（drawFlow が参照する現在値）。ここでは初期値を入れるだけ。
-Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1 });
+// fuelShow: 012F をポーリングするのはこのアプリだけなので、枠を出すのもここだけ。
+// リプレイ/動画は D.fuelLvl を持たないため何も描かれない。
+Object.assign(D, { engRot:0, soc:NaN, pbat:0, vsp:0, psys:0, peng:0, runMode:-1, pgen:0, pdrive:0, dispMode:-1, fuelShow:true });
 // off90(bit720) = gen_trq(発電機トルク, 生信号)。2920単独で独立に物理換算する。
 // ENG-GEN同軸ゆえ定常の torque balance 比例部分: eng_trq_Nm ≈ gen_trq_Nm。
 // 走行ログ散布図(eng_trq vs gen_trq)の比例係数 |gen_trq|/eng_trq ≈ 0.535 と
