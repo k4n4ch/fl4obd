@@ -276,7 +276,8 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 
 <!-- CONTROLS: 接続・ログ・DEMO -->
 <div class="hdr">
-  <div class="logo">FL4 OBD MONITOR <span style="font-size:0.6em;opacity:0.6">v20260718c</span></div>
+  <!-- 版はスクリプトの APP_VER が唯一の出どころ。ここは流し込み先 -->
+  <div class="logo">FL4 OBD MONITOR <span id="verTxt" style="font-size:0.6em;opacity:0.6"></span></div>
   <div class="hdr-r">
     <span class="stt" id="sttTxt">DISCONNECTED</span>
     <div class="dot" id="dot"></div>
@@ -304,6 +305,15 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
 
 <script src="lib/flow.js"></script>
 <script>
+/*
+ * 版。中身を変えたら必ず上げる。日付 + 同日内の連番(a,b,c…)。
+ * ここが唯一の出どころで、画面ヘッダ・保存ログの見出し・起動時のログ行に流し込む。
+ * GitHub Pages はブラウザキャッシュが効くので、手元が新しい版かどうかは
+ * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
+ * これで後から特定できる。
+ */
+const APP_VER = 'v20260819a';
+
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
 let logRecording = false;
@@ -328,6 +338,10 @@ function log(msg, cls) {
   }
 }
 
+// 版を画面と起動ログの両方に出す（log() と let 宣言より後で呼ぶ必要がある）
+document.getElementById('verTxt').textContent = APP_VER;
+log('FL4 OBD MONITOR ' + APP_VER, 'ok');
+
 function toggleRec() {
   const btn = document.getElementById('recBtn');
   if (!logRecording) {
@@ -335,7 +349,7 @@ function toggleRec() {
     logRecording = true;
     btn.textContent = '■ STOP';
     btn.classList.add('rec');
-    log('--- REC START ---', 'ok');
+    log('--- REC START --- ' + APP_VER, 'ok');
     syncGpsRecording();
   } else {
     logRecording = false;
@@ -345,6 +359,7 @@ function toggleRec() {
     if (logBuffer.length === 0) return;
     const lines = logBuffer.map(e => `[${e.ts}] [${(e.cls||'   ').padEnd(3)}] ${e.msg}`);
     const text = 'FL4 OBD MONITOR LOG\n' +
+      'App: ' + APP_VER + '\n' +
       'Generated: ' + new Date().toISOString() + '\n' +
       '='.repeat(60) + '\n' + lines.join('\n');
     const blob = new Blob([text], { type: 'text/plain' });
