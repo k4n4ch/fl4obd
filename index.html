@@ -755,6 +755,11 @@ function decodeService01(bytes) {
       D.catTemp = ((d[2] << 8) | d[3]) / 10.0 - 40.0; break;
     case 0x68: // Intake air temp (multi-sensor) A=bitmap B=sensor1
       if (d[2] & 0x01) D.intTemp = d[3] - 40; break;
+    case 0x2F: // Fuel Tank Level Input = 100A/255 [%] (TA=0x10 のみ応答)
+      D.fuelLvl = d[2] * 100.0 / 255.0;
+      // 生応答(← 412FXX)だけだと保存ログから拾いにくいので数値でも残す
+      log('燃料残量 ' + D.fuelLvl.toFixed(1) + ' % (raw ' + d[2] + '/255)', 'ok');
+      break;
   }
 }
 
@@ -1025,21 +1030,30 @@ async function sendRaw(s) {
 
 // ─── ポーリング ───────────────────────────────────────────
 // レスポンス駆動: onRx で '>' 受信 → 即次コマンド送信。
-// 全ECU 0x07 (ATSH18DAF107固定) から取得:
+// 基本は TA=0x07 (ATSH18DAF107) から取得:
 //   222920 … 全ゲージ(Vsp/Psys/Peng/Pbat/ENGrpm/RunMode)。可能な限り高速、ただし100ms下限ガード
 //   015B   … SOC   1秒ごとに1回だけ差し込む
 //   0142   … 12V   5秒ごとに1回だけ差し込む
+//   012F   … 燃料タンク残量。TA=0x10 でしか応答しないのでヘッダー切替を挟んで60秒ごと
 const CMD_2920 = '222920';
 const MIN_2920_INTERVAL = 100; // ms  2920の下限ガード
 const SOC_INTERVAL = 30000;    // ms  SOCは30秒毎に間引き(∫Pbat内挿で~0.6%精度, 枠を2920に回す)
 const V12_INTERVAL = 10000;    // ms  12Vも同様
+// 燃料タンク残量(012F)は TA=0x10 でしか返らないため、前後にヘッダー切替を挟む。
+// 3コマンド×約0.1s を消費するので低頻度で回す。分解能 100/255=0.39%(40L 換算 0.16L)
+// の粗い信号で、変化も遅いため 60秒で足りる。
+const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)
+const HDR_FUEL = '18DAF110';   // 012F 用
+const FUEL_INTERVAL = 60000;   // ms
 
-let last2920 = 0, lastSoc = 0, lastV12 = 0;
+let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
+let cmdSeq = [];               // 割り込ませる連続コマンド列（ヘッダー切替を伴うもの）
 
 function buildCmdQueue() {
   // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
   const now = Date.now();
-  last2920 = 0; lastSoc = 0; lastV12 = 0;
+  last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
+  cmdSeq = [];                 // 再接続時に前回の切替途中が残らないようにする
 }
 
 function sendNextPid() {
@@ -1048,7 +1062,14 @@ function sendNextPid() {
   clearTimeout(pollWatchdog);
   const now = Date.now();
   let cmd;
-  if (now - lastSoc >= SOC_INTERVAL)      { cmd = '015B'; lastSoc = now; }
+  // 切替途中の列を最優先で出し切る。ここを飛ばすとヘッダーが 0x10 のまま 2920 を撃つ
+  if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
+  else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
+  else if (now - lastFuel >= FUEL_INTERVAL) {
+    lastFuel = now;
+    cmd = 'ATSH' + HDR_FUEL;
+    cmdSeq = ['012F', 'ATSH' + HDR_MAIN];   // 012F が無応答でもヘッダーは戻る
+  }
   // 0142(12V)ポーリングは廃止: 12Vは 2920 byte14 で高レート取得(parse22_2920)
   else {
     // 2920 ホットループ + 100ms下限ガード
