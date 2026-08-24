@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260819g';
+const APP_VER = 'v20260825a';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -774,8 +774,11 @@ function decodeService01(bytes) {
       if (d[2] & 0x01) D.intTemp = d[3] - 40; break;
     case 0x2F: // Fuel Tank Level Input = 100A/255 [%] (TA=0x10 のみ応答)
       D.fuelLvl = d[2] * 100.0 / 255.0;
-      // 生応答(← 412FXX)だけだと保存ログから拾いにくいので数値でも残す
-      log('燃料残量 ' + D.fuelLvl.toFixed(1) + ' % (raw ' + d[2] + '/255)', 'ok');
+      // 生応答(← 412FXX)だけだと保存ログから拾いにくいので数値でも残す。
+      // 停車継続も併記する。走行中の点と停車中の点を後から分けて評価するため
+      // （GPX と突き合わせずに済む）
+      log('燃料残量 ' + D.fuelLvl.toFixed(1) + ' % (raw ' + d[2] + '/255) '
+          + (stopSince ? '停車' + Math.round((Date.now() - stopSince) / 1000) + 's' : '走行中'), 'ok');
       break;
   }
 }
@@ -1107,9 +1110,30 @@ const HDR_MAIN = '18DAF107';   // 常用(222920 / 015B)。実測でこれで応�
  *      （未確認なので残してある）。
  */
 const CRA_FUEL = '18DAF110';   // ECU 0x10 → テスタ F1 の応答だけを通す
-const FUEL_INTERVAL = 60000;   // ms  分解能 0.39%(40L 換算 0.16L)で変化も遅い
+/*
+ * 燃料タンク残量は停車中に集中して撃つ。
+ *
+ * 単発の値は使えない。実測(2026-08-19〜24, 10走行 122点)で 1走行内の幅が
+ * 中央 16カウント=2.5L あり、11km走行の消費 0.6L より大きい。使える推定量は
+ * 中央値で、偏差の 51% がログ中央値と完全一致する。つまり**点数が要る**。
+ *
+ * 一律 60秒では 1走行あたり停車中に当たるのが 0〜9点しかなく、中央値が立たない。
+ * 車速ゼロならフロー図に見るものが無いので、その枠を燃料へ回す。
+ *
+ * これは「1回の停車の中で値がばらつくか」の検証も兼ねる。ばらつけば独立なので
+ * 中央値で √n に落ちる。張り付くなら相関時間が停車より長く、**中央値では改善しない**
+ * （日をまたいだ平均に頼ることになる）。60秒間隔の既存データでは区別できていない。
+ *
+ * 車速の穴は「燃料1組 + 2920 1回」= 266+448 = 714ms で頭打ちになる。1組に 012F を
+ * 1本しか入れないため。まとめ撃ちすれば ATCRA の往復 104ms を節約できるが、
+ * **発進検知の遅れの上限を買うために捨てている**。
+ */
+const FUEL_INTERVAL      = 60000;  // ms  走行中。推移の記録用
+const FUEL_STOP_INTERVAL = 2000;   // ms  停車中の連射。ECU 側の更新が 1Hz 程度との見当
+const STOP_SETTLE        = 10000;  // ms  停車がこれだけ続いてから連射に入る
 
 let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
+let stopSince = 0;             // 車速ゼロが続き始めた時刻。0 = 走行中
 let cmdSeq = [];               // 先頭から順に出し切る割り込みコマンド列
 
 function buildCmdQueue() {
@@ -1124,12 +1148,22 @@ function sendNextPid() {
   if (awaiting) return;      // 応答待ち中は撃たない（チェーンは常に1本）
   clearTimeout(pollWatchdog);
   const now = Date.now();
+
+  // 車速ゼロの継続を追う。この関数は 2Hz 前後で回るので分解能は足りる
+  if (!(D.vsp < 1)) {            // 未取得(undefined)も走行中として扱う
+    stopSince = 0;
+    // 発進したら連射をやめる。ただし ATCRA を送らずに抜けると受信フィルタが
+    // ECU 0x10 のままになり 2920 の応答まで捨てるので、012F だけ落として復帰は残す
+    if (cmdSeq[0] === '012F') cmdSeq = ['ATCRA'];
+  } else if (!stopSince) stopSince = now;
+  const settled = stopSince && now - stopSince >= STOP_SETTLE;
+
   let cmd;
   // 受信フィルタ切替の列は最優先で出し切る。途中で割り込むと 2920 の応答を
   // ECU 0x10 のフィルタで捨てることになる
   if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
   else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
-  else if (now - lastFuel >= FUEL_INTERVAL) {
+  else if (now - lastFuel >= (settled ? FUEL_STOP_INTERVAL : FUEL_INTERVAL)) {
     lastFuel = now;
     cmd = 'ATCRA' + CRA_FUEL;
     cmdSeq = ['012F', 'ATCRA'];   // 012F が無応答でも最後の ATCRA で既定へ戻る
