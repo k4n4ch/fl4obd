@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260827a';
+const APP_VER = 'v20260826b';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -1131,15 +1131,27 @@ const CRA_FUEL = '18DAF110';   // ECU 0x10 → テスタ F1 の応答だけを�
 const FUEL_INTERVAL      = 60000;  // ms  走行中。推移の記録用
 const FUEL_STOP_INTERVAL = 2000;   // ms  停車中の連射。ECU 側の更新が 1Hz 程度との見当
 const STOP_SETTLE        = 5000;   // ms  停車がこれだけ続いてから連射に入る
+/*
+ * 1回の停車で撃つ上限。**停車中は値がまったく動かない**ので、それ以上は同じ数字を
+ * 集めるだけになる。実測（2026-08-25 の3走行、停車エピソード 38件）で
+ * エピソード内の幅は中央 0、23/33 が幅ゼロ。ばらつきは全部エピソード**間**にある。
+ * 1回の停車＝1点の独立サンプルなので、確認用に数点あれば足りる。
+ * 上限なしだと 331点で 88秒ぶんのポーリング時間を使う（有効なのは 23点）。
+ */
+const FUEL_STOP_MAX      = 3;
 
 let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
 let stopSince = 0;             // 車速ゼロが続き始めた時刻。0 = 走行中
+let fuelStopN = 0;             // いまの停車で撃った回数
 let cmdSeq = [];               // 先頭から順に出し切る割り込みコマンド列
 
 function buildCmdQueue() {
   // 接続直後: SOC/12Vを即時1回撮ってから 2920 ホットループに入る
   const now = Date.now();
   last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
+  // D.vsp の初期値が 0 なので、接続前から「停車中」と判定されて stopSince が起動時に
+  // 立つ。捨てないと「停車39998s」のような値がログに出て、後から停車時間で層別できない
+  stopSince = 0; fuelStopN = 0;
   cmdSeq = [];                 // 再接続時に受信フィルタ切替の途中が残らないようにする
 }
 
@@ -1151,12 +1163,12 @@ function sendNextPid() {
 
   // 車速ゼロの継続を追う。この関数は 2Hz 前後で回るので分解能は足りる
   if (!(D.vsp < 1)) {            // 未取得(undefined)も走行中として扱う
-    stopSince = 0;
+    stopSince = 0; fuelStopN = 0;
     // 発進したら連射をやめる。ただし ATCRA を送らずに抜けると受信フィルタが
     // ECU 0x10 のままになり 2920 の応答まで捨てるので、012F だけ落として復帰は残す
     if (cmdSeq[0] === '012F') cmdSeq = ['ATCRA'];
   } else if (!stopSince) stopSince = now;
-  const settled = stopSince && now - stopSince >= STOP_SETTLE;
+  const settled = stopSince && now - stopSince >= STOP_SETTLE && fuelStopN < FUEL_STOP_MAX;
 
   let cmd;
   // 受信フィルタ切替の列は最優先で出し切る。途中で割り込むと 2920 の応答を
@@ -1165,6 +1177,7 @@ function sendNextPid() {
   else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
   else if (now - lastFuel >= (settled ? FUEL_STOP_INTERVAL : FUEL_INTERVAL)) {
     lastFuel = now;
+    if (stopSince) fuelStopN++;
     cmd = 'ATCRA' + CRA_FUEL;
     cmdSeq = ['012F', 'ATCRA'];   // 012F が無応答でも最後の ATCRA で既定へ戻る
   }
