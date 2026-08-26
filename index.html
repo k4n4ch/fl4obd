@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260825a';
+const APP_VER = 'v20260827a';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -1130,7 +1130,7 @@ const CRA_FUEL = '18DAF110';   // ECU 0x10 → テスタ F1 の応答だけを�
  */
 const FUEL_INTERVAL      = 60000;  // ms  走行中。推移の記録用
 const FUEL_STOP_INTERVAL = 2000;   // ms  停車中の連射。ECU 側の更新が 1Hz 程度との見当
-const STOP_SETTLE        = 10000;  // ms  停車がこれだけ続いてから連射に入る
+const STOP_SETTLE        = 5000;   // ms  停車がこれだけ続いてから連射に入る
 
 let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
 let stopSince = 0;             // 車速ゼロが続き始めた時刻。0 = 走行中
