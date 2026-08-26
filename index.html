@@ -312,7 +312,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260826b';
+const APP_VER = 'v20260826c';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -1143,6 +1143,12 @@ const FUEL_STOP_MAX      = 3;
 let last2920 = 0, lastSoc = 0, lastV12 = 0, lastFuel = 0;
 let stopSince = 0;             // 車速ゼロが続き始めた時刻。0 = 走行中
 let fuelStopN = 0;             // いまの停車で撃った回数
+/*
+ * 接続直後に停車中なら STOP_SETTLE を待たずに撃つ。記録の開始時点の値は
+ * アンカーとして最も価値がある（そこから先の消費を積む起点になる）ので、
+ * 待っている間に発進して取り逃すのを避ける。1回の停車ぶん撃ったら降りる。
+ */
+let startBurst = false;
 let cmdSeq = [];               // 先頭から順に出し切る割り込みコマンド列
 
 function buildCmdQueue() {
@@ -1151,7 +1157,7 @@ function buildCmdQueue() {
   last2920 = 0; lastSoc = 0; lastV12 = 0; lastFuel = 0;
   // D.vsp の初期値が 0 なので、接続前から「停車中」と判定されて stopSince が起動時に
   // 立つ。捨てないと「停車39998s」のような値がログに出て、後から停車時間で層別できない
-  stopSince = 0; fuelStopN = 0;
+  stopSince = 0; fuelStopN = 0; startBurst = true;
   cmdSeq = [];                 // 再接続時に受信フィルタ切替の途中が残らないようにする
 }
 
@@ -1161,21 +1167,36 @@ function sendNextPid() {
   clearTimeout(pollWatchdog);
   const now = Date.now();
 
-  // 車速ゼロの継続を追う。この関数は 2Hz 前後で回るので分解能は足りる
-  if (!(D.vsp < 1)) {            // 未取得(undefined)も走行中として扱う
-    stopSince = 0; fuelStopN = 0;
-    // 発進したら連射をやめる。ただし ATCRA を送らずに抜けると受信フィルタが
-    // ECU 0x10 のままになり 2920 の応答まで捨てるので、012F だけ落として復帰は残す
-    if (cmdSeq[0] === '012F') cmdSeq = ['ATCRA'];
-  } else if (!stopSince) stopSince = now;
-  const settled = stopSince && now - stopSince >= STOP_SETTLE && fuelStopN < FUEL_STOP_MAX;
+  /*
+   * 車速ゼロの継続を追う。この関数は 2Hz 前後で回るので分解能は足りる。
+   * **車速が取れるまでは何も判定しない。** 未取得を走行中として扱うと、接続直後の
+   * 1回目で startBurst が消えてしまい、停車中に即撃つ意味が無くなる。
+   */
+  if (Number.isFinite(D.vsp)) {
+    if (D.vsp < 1) { if (!stopSince) stopSince = now; }
+    else {
+      /*
+       * 発進した瞬間だけ連射を打ち切る。ATCRA を送らずに抜けると受信フィルタが
+       * ECU 0x10 のままになり 2920 の応答まで捨てるので、012F だけ落として復帰は残す。
+       *
+       * **stopSince を見ずに毎周期これをやると、走行中に予約した 012F も必ず消える。**
+       * v20260825a〜v20260826b はそうなっており、走行中の60秒ポーリングが一度も
+       * 成立していなかった（実測3走行で走行中の取得が0件）。
+       */
+      if (stopSince && cmdSeq[0] === '012F') cmdSeq = ['ATCRA'];
+      stopSince = 0; fuelStopN = 0; startBurst = false;
+    }
+  }
+  const settled = stopSince && (startBurst || now - stopSince >= STOP_SETTLE) && fuelStopN < FUEL_STOP_MAX;
 
   let cmd;
   // 受信フィルタ切替の列は最優先で出し切る。途中で割り込むと 2920 の応答を
   // ECU 0x10 のフィルタで捨てることになる
   if (cmdSeq.length)                      { cmd = cmdSeq.shift(); }
   else if (now - lastSoc >= SOC_INTERVAL) { cmd = '015B'; lastSoc = now; }
-  else if (now - lastFuel >= (settled ? FUEL_STOP_INTERVAL : FUEL_INTERVAL)) {
+  // 車速が取れるまでは撃たない。撃つと停車中でも「走行中」と記録され、後から
+  // 停車時間で層別できなくなる。2920 は 0.5秒で返るので待ちは一瞬
+  else if (Number.isFinite(D.vsp) && now - lastFuel >= (settled ? FUEL_STOP_INTERVAL : FUEL_INTERVAL)) {
     lastFuel = now;
     if (stopSince) fuelStopN++;
     cmd = 'ATCRA' + CRA_FUEL;
