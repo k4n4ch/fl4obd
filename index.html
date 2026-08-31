@@ -139,6 +139,9 @@ body.compact .log-wrap  { grid-column:1/-1; grid-row:3; margin:0; }
 /* 走行中に押さないものを畳む。GPS と状態ランプは残す */
 body.compact .navbar > *:not(#gpsBtn) { display:none; }
 body.compact .logo, body.compact #sttTxt { display:none; }
+/* 状態文字を畳むぶんランプだけが状態を伝える。未接続の暗い色のままでは背景に
+   埋もれるので、圧縮時は少し大きく・枠を明るくする（再接続中の橙は元から目立つ） */
+body.compact .dot { width:12px; height:12px; border-color:#5a7a9a; }
 body.compact .log  { height:16px; padding:2px 8px; line-height:1.5; overflow:hidden; }
 body.compact .conn-btn { padding:7px 6px; font-size:10px; letter-spacing:1px; white-space:nowrap; }
 body.compact .vtab { padding:5px 6px; }
@@ -356,7 +359,7 @@ body.compact .vtab { padding:5px 6px; }
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260901a';
+const APP_VER = 'v20260901b';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
