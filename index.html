@@ -84,9 +84,12 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
    回転フリー端末を横に向けても縦表示を維持する。
    Orientation Lock API は iOS非対応/要フルスクリーンで実用外のため CSS で対処:
    タッチ端末が横向きのとき body を反回転し、縦アスペクトのまま描画する。 */
+/* 判定は screen.orientation（端末の向き）。ビューポートの縦横比で判定すると
+   **画面分割で横長のペインになったときにも一致して中身だけ90°回る**。
+   API が無い環境のためにメディアクエリも残すが、JS が効く環境では body.noflip で無効化する。 */
 @media (orientation: landscape) and (pointer: coarse) {
   html { overflow-x: hidden; }
-  body {
+  body:not(.noflip) {
     position: absolute;
     top: 100vh;
     left: 0;
@@ -98,6 +101,23 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
     overflow-y: auto;
   }
 }
+body.flip {                      /* 端末が横向きのときだけ JS が付ける */
+  position:absolute; top:100vh; left:0; width:100vh; height:100vw;
+  transform:rotate(-90deg); transform-origin:left top; overflow-x:hidden; overflow-y:auto;
+}
+
+/* ── 圧縮モード ────────────────────────────────────────────
+   高さが足りない枠（画面分割など）では、走行中に使わないものを畳んで図に高さを回す。
+   タイトル/版・下部のリンク列を隠し、ログを1行にする。281px → 148px。
+   接続と REC は残す（再接続と記録の開始/停止は走行中に要る）。 */
+body.compact .hdr,
+body.compact .navbar { display:none; }
+body.compact .log { height:16px; padding:2px 8px; line-height:1.5; overflow:hidden; }
+body.compact .log-wrap { margin-bottom:5px; }
+body.compact .conn-btn { padding:7px; margin-bottom:5px; }
+body.compact .vtabs { margin:0 0 4px; }
+body.compact .vtab { padding:5px; }
+body.compact .app { padding:2px 6px 4px; }
 
 /* VIEW TABS (フロー / ゲージ) */
 .vtabs{display:flex;gap:5px;margin:2px 0 7px;}
@@ -312,7 +332,7 @@ body{background:#070b0f;color:#c8d8e8;font-family:'Courier New',monospace;min-he
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260826c';
+const APP_VER = 'v20260831a';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -660,6 +680,46 @@ function setView(v){
   document.getElementById('tabFlow').classList.toggle('active',  v==='flow');
   if (v==='flow') drawFlow();
 }
+/*
+ * ── 枠に合わせてレイアウトを選ぶ ──────────────────────────
+ *
+ * 縦長 380×600 は幅基準で拡大されるため、高さの取れない枠（画面分割など）では
+ * はみ出して切れる。入る高さが無ければ横長 640×240 に切り替え、併せて走行中に
+ * 使わない要素を畳む（body.compact）。**切替は viewBox で行い、flow.js が
+ * それを見てレイアウトを選ぶ**ので、replay/video は 380×600 のまま影響を受けない。
+ *
+ * 強制ポートレートの回転は screen.orientation（端末の向き）で判定する。
+ * ビューポートの縦横比で判定すると、画面分割で横長のペインになったときにも
+ * 一致して中身だけ90°回ってしまう。
+ */
+/*
+ * 圧縮に入るしきい値。縦長の図は幅の 600/380 = 1.58 倍の高さを要求し、操作系を足すと
+ * 枠の高さは幅の 2.3 倍ほど要る。全画面（縦横比 2.1 前後）は多少スクロールすれば
+ * 使えるので従来のまま。**1.6 を下回ると図が実用にならない**ので、そこで切り替える。
+ *   全画面 411×860 = 2.09 → 通常 / 分割 411×495 = 1.20 → 圧縮 / 横長 740×300 = 0.41 → 圧縮
+ */
+const COMPACT_RATIO = 1.6;
+function applyLayout() {
+  const land = /^landscape/.test((screen.orientation || {}).type || '');
+  document.body.classList.toggle('noflip', !!(screen.orientation || {}).type);
+  document.body.classList.toggle('flip', land);
+  const w = document.querySelector('.app').clientWidth || window.innerWidth;
+  const h = land ? window.innerWidth : window.innerHeight;      // 回転時は入れ替わる
+  const compact = h < w * COMPACT_RATIO;
+  document.body.classList.toggle('compact', compact);
+  const svg = document.getElementById('flowSvg');
+  const vb = compact ? '0 0 640 240' : '0 0 380 600';
+  if (svg.getAttribute('viewBox') !== vb) {
+    svg.setAttribute('viewBox', vb);
+    svg.setAttribute('width', compact ? 640 : 380);
+    svg.setAttribute('height', compact ? 240 : 600);
+    if (currentView === 'flow') drawFlow();
+  }
+}
+addEventListener('resize', applyLayout);
+if (screen.orientation) screen.orientation.addEventListener('change', applyLayout);
+applyLayout();
+
 drawFlow();   // 既定がフロー図なので、接続前でも初期値で描いておく（空の SVG を見せない）
 
 // ─── スワイプで FLOW ⇄ GAUGE 切替（タブと併用） ─────────────
