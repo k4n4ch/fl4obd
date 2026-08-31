@@ -110,14 +110,38 @@ body.flip {                      /* 端末が横向きのときだけ JS が付�
    高さが足りない枠（画面分割など）では、走行中に使わないものを畳んで図に高さを回す。
    タイトル/版・下部のリンク列を隠し、ログを1行にする。281px → 148px。
    接続と REC は残す（再接続と記録の開始/停止は走行中に要る）。 */
-body.compact .hdr,
-body.compact .navbar { display:none; }
-body.compact .log { height:16px; padding:2px 8px; line-height:1.5; overflow:hidden; }
-body.compact .log-wrap { margin-bottom:5px; }
-body.compact .conn-btn { padding:7px; margin-bottom:5px; }
-body.compact .vtabs { margin:0 0 4px; }
-body.compact .vtab { padding:5px; }
-body.compact .app { padding:2px 6px 4px; }
+/*
+ * 操作系は1行に並べる。DOM の順序は
+ *   vtabs / gaugeView / flowView / hdr / connBtn / log-wrap / recBtn / navbar
+ * で、隣り合っていないので flex では1行にできない。**Grid で明示配置する**ことで
+ * DOM を触らずに並べ替える（replay/video や通常モードに一切影響しない）。
+ *
+ *   行1  図（残り全部の高さ）
+ *   行2  [FLOW|GAUGE]  [接続]  [REC]  [GPS]  ●
+ *   行3  ログ1行
+ */
+body.compact .app {
+  display:grid; height:100svh; box-sizing:border-box; padding:3px 6px 4px; gap:4px;
+  grid-template-columns:auto 1fr 1fr auto auto;
+  grid-template-rows:1fr auto auto;
+}
+body.compact #flowView,
+body.compact #gaugeView { grid-column:1/-1; grid-row:1; min-height:0; overflow:hidden; }
+body.compact #flowView  { display:flex; }
+body.compact #flowSvg   { width:100%; height:100%; margin:0; }
+body.compact .vtabs     { grid-column:1; grid-row:2; margin:0; gap:4px; }
+body.compact #connBtn   { grid-column:2; grid-row:2; margin:0; }
+body.compact #recBtn    { grid-column:3; grid-row:2; margin:0; }
+body.compact .navbar    { grid-column:4; grid-row:2; margin:0; }
+body.compact .hdr       { grid-column:5; grid-row:2; margin:0; padding:0 2px; border:none; }
+body.compact .log-wrap  { grid-column:1/-1; grid-row:3; margin:0; }
+
+/* 走行中に押さないものを畳む。GPS と状態ランプは残す */
+body.compact .navbar > *:not(#gpsBtn) { display:none; }
+body.compact .logo, body.compact #sttTxt { display:none; }
+body.compact .log  { height:16px; padding:2px 8px; line-height:1.5; overflow:hidden; }
+body.compact .conn-btn { padding:7px 6px; font-size:10px; letter-spacing:1px; white-space:nowrap; }
+body.compact .vtab { padding:5px 6px; }
 
 /* VIEW TABS (フロー / ゲージ) */
 .vtabs{display:flex;gap:5px;margin:2px 0 7px;}
@@ -332,7 +356,7 @@ body.compact .app { padding:2px 6px 4px; }
  * 画面右上と保存ログの App: 行で確かめる。取得したログがどの版のものかも
  * これで後から特定できる。
  */
-const APP_VER = 'v20260831a';
+const APP_VER = 'v20260901a';
 
 // ─── Log ─────────────────────────────────────────────────
 let logBuffer = [];
@@ -699,6 +723,7 @@ function setView(v){
  *   全画面 411×860 = 2.09 → 通常 / 分割 411×495 = 1.20 → 圧縮 / 横長 740×300 = 0.41 → 圧縮
  */
 const COMPACT_RATIO = 1.6;
+let uiState = 'off';        // setUI の最後の状態。圧縮の切替でラベルを付け直すのに使う
 function applyLayout() {
   const land = /^landscape/.test((screen.orientation || {}).type || '');
   document.body.classList.toggle('noflip', !!(screen.orientation || {}).type);
@@ -706,7 +731,9 @@ function applyLayout() {
   const w = document.querySelector('.app').clientWidth || window.innerWidth;
   const h = land ? window.innerWidth : window.innerHeight;      // 回転時は入れ替わる
   const compact = h < w * COMPACT_RATIO;
+  const was = document.body.classList.contains('compact');
   document.body.classList.toggle('compact', compact);
+  if (was !== compact) setUI();      // ボタンの文言を長短で入れ替える
   const svg = document.getElementById('flowSvg');
   const vb = compact ? '0 0 640 240' : '0 0 380 600';
   if (svg.getAttribute('viewBox') !== vb) {
@@ -1505,6 +1532,7 @@ async function attemptReconnect() {
 }
 
 function setUI(s) {
+  uiState = s = s || uiState;        // 引数なしは「いまの状態で描き直す」
   const dot = document.getElementById('dot');
   const txt = document.getElementById('sttTxt');
   const btn = document.getElementById('connBtn');
@@ -1512,7 +1540,11 @@ function setUI(s) {
   dot.className = 'dot ' + (s === 'on' ? 'on' : busy ? 'chk' : '');
   txt.textContent = s === 'on' ? 'CONNECTED' : s === 'chk' ? 'CONNECTING' : s === 'rec' ? 'RECONNECTING' : 'DISCONNECTED';
   txt.style.color  = s === 'on' ? '#00cc66' : busy ? '#ffaa00' : '#2a5a7a';
-  btn.textContent  = (s === 'on' || s === 'rec') ? '[ 切断する ]' : '[ BLUETOOTH 接続 ]';
+  // 圧縮モードは1行に5つ並ぶので文言を詰める（列幅に収まらないと切れる）
+  const cmp = document.body.classList.contains('compact');
+  btn.textContent  = (s === 'on' || s === 'rec')
+    ? (cmp ? '[ 切断 ]' : '[ 切断する ]')
+    : (cmp ? '[ 接続 ]' : '[ BLUETOOTH 接続 ]');
   btn.disabled     = (s === 'chk');   // 再接続中(rec)はボタン有効=中止可能
 }
 
