@@ -1,0 +1,271 @@
+defs[]
+  marker[id=fah_mech markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#ff9a44]
+  marker[id=fah_elec markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#00e5ff]
+  marker[id=fah_regen markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#25e0a0]
+  marker[id=fah_aux markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#c9a0ff]
+path[d=M68 185 L68 58 L166 58 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 185 L190 82 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M68 241 L68 390 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M116 418 L181 418 fill=none marker-end=url(#fah_elec) opacity=0.15 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 409 L190 241 fill=none marker-end=url(#fah_elec) opacity=0.15 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 512 L190 427 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=470]{0.8}
+path[d=M199 418 L264 418 fill=none marker-end=url(#fah_aux) opacity=1 stroke=#c9a0ff stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#c9a0ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=378]{0.8}
+circle[cx=190 cy=418 fill=#0a0e14 r=8 stroke=#00e5ff stroke-width=2.5]
+circle[cx=190 cy=418 fill=#00e5ff r=3]
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=20 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=209]{ENG}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=231]{0 rpm}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=142 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=216]{MOT}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=190 y=231]{P_mot}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=20 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=421]{GEN}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=68 y=436]{P_gen}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=512]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=536]{BAT}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=558]{SOC 29%}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=264 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=414]{AUX/AC}
+  text[fill=#c9a0ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=436]{0.8kW}
+g[opacity=0.45]
+  circle[cx=190 cy=58 fill=none r=20 stroke=#889 stroke-width=3.5]
+  circle[cx=190 cy=58 fill=#889 r=5]
+  text[fill=#889 font-size=11 text-anchor=end x=158 y=64]{車輪}
+text[fill=#9fe8ff font-family=Courier New font-size=24 font-weight=bold text-anchor=start x=220 y=66]{0 km/h}
+g[opacity=1]
+  text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=520]{FUEL}
+  text[fill=#dfefff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=550]{21.8 L}
+  text[fill=#7a95ad font-family=Courier New font-size=11 text-anchor=middle x=312 y=568]{54.5 %  /40L}
+text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=193]{MODE}
+text[fill=#00e5ff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=223]{EV}
+=====
+defs[]
+  marker[id=fah_mech markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#ff9a44]
+  marker[id=fah_elec markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#00e5ff]
+  marker[id=fah_regen markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#25e0a0]
+  marker[id=fah_aux markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#c9a0ff]
+path[d=M68 185 L68 58 L166 58 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 185 L190 82 fill=none marker-end=url(#fah_mech) opacity=1 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=4.667999999999999]
+text[fill=#ff9a44 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=140]{12.6}
+path[d=M68 390 L68 241 fill=none marker-end=url(#fah_mech) opacity=1 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=6]
+text[fill=#ff9a44 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=middle x=128 y=326]{20.0}
+path[d=M181 418 L116 418 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=6]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=middle x=132 y=378]{20.0}
+path[d=M190 409 L190 241 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=4.667999999999999]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=326]{12.6}
+path[d=M190 427 L190 512 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=470]{3.4}
+path[d=M199 418 L264 418 fill=none marker-end=url(#fah_aux) opacity=0.15 stroke=#c9a0ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+circle[cx=190 cy=418 fill=#0a0e14 r=8 stroke=#00e5ff stroke-width=2.5]
+circle[cx=190 cy=418 fill=#00e5ff r=3]
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=20 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=209]{ENG}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=231]{2100 rpm}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=216]{MOT}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=190 y=231]{P_mot}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=20 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=421]{GEN}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=68 y=436]{P_gen}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=512]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=536]{BAT}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=558]{SOC 38%}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=264 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=414]{AUX/AC}
+  text[fill=#c9a0ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=436]{--}
+g[opacity=1]
+  circle[cx=190 cy=58 fill=none r=20 stroke=#889 stroke-width=3.5]
+  circle[cx=190 cy=58 fill=#889 r=5]
+  text[fill=#889 font-size=11 text-anchor=end x=158 y=64]{車輪}
+text[fill=#9fe8ff font-family=Courier New font-size=24 font-weight=bold text-anchor=start x=220 y=66]{42 km/h}
+g[opacity=1]
+  text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=520]{FUEL}
+  text[fill=#dfefff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=550]{19.4 L}
+  text[fill=#7a95ad font-family=Courier New font-size=11 text-anchor=middle x=312 y=568]{48.5 %  /40L}
+text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=193]{MODE}
+text[fill=#00e5ff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=223]{SERIES}
+=====
+defs[]
+  marker[id=fah_mech markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#ff9a44]
+  marker[id=fah_elec markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#00e5ff]
+  marker[id=fah_regen markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#25e0a0]
+  marker[id=fah_aux markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#c9a0ff]
+path[d=M68 185 L68 58 L166 58 fill=none marker-end=url(#fah_mech) opacity=1 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=6.7379999999999995]
+text[fill=#ff9a44 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=middle x=128 y=140]{24.1}
+path[d=M190 82 L190 185 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=140]{2.2}
+path[d=M68 241 L68 390 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M116 418 L181 418 fill=none marker-end=url(#fah_elec) opacity=0.15 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 241 L190 409 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=326]{2.2}
+path[d=M190 427 L190 512 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=470]{6.1}
+path[d=M199 418 L264 418 fill=none marker-end=url(#fah_aux) opacity=0.15 stroke=#c9a0ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+circle[cx=190 cy=418 fill=#0a0e14 r=8 stroke=#00e5ff stroke-width=2.5]
+circle[cx=190 cy=418 fill=#00e5ff r=3]
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=20 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=209]{ENG}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=231]{2050 rpm}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=216]{MOT}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=190 y=231]{P_mot}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=20 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=421]{GEN}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=68 y=436]{P_gen}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=512]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=536]{BAT}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=558]{SOC 52%}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=264 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=414]{AUX/AC}
+  text[fill=#c9a0ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=436]{--}
+g[opacity=1]
+  circle[cx=190 cy=58 fill=none r=20 stroke=#889 stroke-width=3.5]
+  circle[cx=190 cy=58 fill=#889 r=5]
+  text[fill=#889 font-size=11 text-anchor=end x=158 y=64]{車輪}
+text[fill=#9fe8ff font-family=Courier New font-size=24 font-weight=bold text-anchor=start x=220 y=66]{89 km/h}
+g[opacity=1]
+  text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=520]{FUEL}
+  text[fill=#dfefff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=550]{18.2 L}
+  text[fill=#7a95ad font-family=Courier New font-size=11 text-anchor=middle x=312 y=568]{45.5 %  /40L}
+text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=193]{MODE}
+text[fill=#ff9a44 font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=223]{DIRECT}
+=====
+defs[]
+  marker[id=fah_mech markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#ff9a44]
+  marker[id=fah_elec markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#00e5ff]
+  marker[id=fah_regen markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#25e0a0]
+  marker[id=fah_aux markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#c9a0ff]
+path[d=M68 185 L68 58 L166 58 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 185 L190 82 fill=none marker-end=url(#fah_mech) opacity=1 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=3.84]
+text[fill=#ff9a44 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=140]{8.0}
+path[d=M68 390 L68 241 fill=none marker-end=url(#fah_mech) opacity=1 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=4.5600000000000005]
+text[fill=#ff9a44 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=middle x=128 y=326]{12.0}
+path[d=M181 418 L116 418 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=4.5600000000000005]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=middle x=132 y=378]{12.0}
+path[d=M190 409 L190 241 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=3.84]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=326]{8.0}
+path[d=M190 512 L190 427 fill=none marker-end=url(#fah_elec) opacity=1 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#00e5ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=470]{2.0}
+path[d=M199 418 L264 418 fill=none marker-end=url(#fah_aux) opacity=0.15 stroke=#c9a0ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+circle[cx=190 cy=418 fill=#0a0e14 r=8 stroke=#00e5ff stroke-width=2.5]
+circle[cx=190 cy=418 fill=#00e5ff r=3]
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=20 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=209]{ENG}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=231]{1800 rpm}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=216]{MOT}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=190 y=231]{P_mot}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=20 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=421]{GEN}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=68 y=436]{P_gen}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=512]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=536]{BAT}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=558]{SOC 61%}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=264 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=414]{AUX/AC}
+  text[fill=#c9a0ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=436]{--}
+g[opacity=1]
+  circle[cx=190 cy=58 fill=none r=20 stroke=#889 stroke-width=3.5]
+  circle[cx=190 cy=58 fill=#889 r=5]
+  text[fill=#889 font-size=11 text-anchor=end x=158 y=64]{車輪}
+text[fill=#9fe8ff font-family=Courier New font-size=24 font-weight=bold text-anchor=start x=220 y=66]{55 km/h}
+g[opacity=1]
+  circle[cx=70 cy=509 fill=#0a1520 r=48 stroke=#2a4a5e stroke-width=1.6]
+  circle[cx=70 cy=509 fill=none r=24 stroke=#223c4e stroke-width=1.2]
+  line[stroke=#223c4e stroke-width=1 x1=22 x2=118 y1=509 y2=509]
+  line[stroke=#223c4e stroke-width=1 x1=70 x2=70 y1=461 y2=557]
+  text[fill=#4a6a80 font-family=Courier New font-size=13 font-weight=bold text-anchor=middle x=41.2 y=486.92]{G}
+  line[opacity=0.5 stroke=#ffcc44 stroke-width=2 x1=70 x2=74.8 y1=509 y2=518.6]
+  circle[cx=74.8 cy=518.6 fill=#ffcc44 r=7 stroke=#fff stroke-width=1.6]
+  text[fill=#ffcc44 font-family=Courier New font-size=14 font-weight=bold text-anchor=middle x=70 y=571]{0.11 g}
+  text[fill=#7a95ad font-family=Courier New font-size=9 text-anchor=middle x=70 y=583]{前後+0.10  左右-0.05}
+text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=193]{MODE}
+text[fill=#8aa0b4 font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=223]{TRANS}
+=====
+defs[]
+  marker[id=fah_mech markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#ff9a44]
+  marker[id=fah_elec markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#00e5ff]
+  marker[id=fah_regen markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#25e0a0]
+  marker[id=fah_aux markerHeight=2.4 markerUnits=strokeWidth markerWidth=2.6 orient=auto refX=2.3 refY=1.2]
+  path[d=M0 0 L2.6 1.2 L0 2.4 Z fill=#c9a0ff]
+path[d=M68 185 L68 58 L166 58 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 82 L190 185 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=4.02]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=140]{9.0}
+path[d=M68 241 L68 390 fill=none marker-end=url(#fah_mech) opacity=0.15 stroke=#ff9a44 stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M116 418 L181 418 fill=none marker-end=url(#fah_elec) opacity=0.15 stroke=#00e5ff stroke-linecap=round stroke-linejoin=round stroke-width=2.6]
+path[d=M190 241 L190 409 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=4.02]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=326]{9.0}
+path[d=M190 427 L190 512 fill=none marker-end=url(#fah_regen) opacity=1 stroke=#25e0a0 stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#25e0a0 font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=470]{5.0}
+path[d=M199 418 L264 418 fill=none marker-end=url(#fah_aux) opacity=1 stroke=#c9a0ff stroke-linecap=round stroke-linejoin=round stroke-width=3.6]
+text[fill=#c9a0ff font-family=Courier New font-size=28 font-weight=bold opacity=1 text-anchor=end x=286 y=378]{3.0}
+circle[cx=190 cy=418 fill=#0a0e14 r=8 stroke=#00e5ff stroke-width=2.5]
+circle[cx=190 cy=418 fill=#00e5ff r=3]
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=20 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=209]{ENG}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=231]{0 rpm}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=185]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=216]{MOT}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=190 y=231]{P_mot}
+g[opacity=0.45]
+  rect[fill=#111a24 height=56 rx=7 stroke=#2a3a4a stroke-width=1.6 width=96 x=20 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=68 y=421]{GEN}
+  text[fill=#5a7a90 font-family=Courier New font-size=10 font-weight=normal text-anchor=middle x=68 y=436]{P_gen}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=142 y=512]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=536]{BAT}
+  text[fill=#9fe8ff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=190 y=558]{SOC 88%}
+g[opacity=1]
+  rect[fill=#111a24 height=56 rx=7 stroke=#4a6a80 stroke-width=1.6 width=96 x=264 y=390]
+  text[fill=#dfefff font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=414]{AUX/AC}
+  text[fill=#ff8844 font-family=Courier New font-size=19 font-weight=bold text-anchor=middle x=312 y=436]{>3.0kW}
+g[opacity=1]
+  circle[cx=190 cy=58 fill=none r=20 stroke=#889 stroke-width=3.5]
+  circle[cx=190 cy=58 fill=#889 r=5]
+  text[fill=#889 font-size=11 text-anchor=end x=158 y=64]{車輪}
+text[fill=#9fe8ff font-family=Courier New font-size=24 font-weight=bold text-anchor=start x=220 y=66]{60 km/h}
+text[fill=#5a7a90 font-family=Courier New font-size=12 letter-spacing=2 text-anchor=middle x=312 y=193]{MODE}
+text[fill=#00e5ff font-family=Courier New font-size=26 font-weight=bold text-anchor=middle x=312 y=223]{EV}
